@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.env
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+npm-debug.log*
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (large - not tracked)
+data/raw/
+data/cleaned/
+data/processed/
+data/dev/
+*.gpkg
+*.parquet
+*.npy
+*.h5
+*.feather
+
+# Keep data directory structure
+!data/.gitkeep
+
+# Logs
+*.log
+logs/
+*.tmp
+
+# Docker
+docker-compose.override.yml
+volumes/
+
+# Secrets
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+secrets/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Neo4j KG courses (reference material, not project code)
+grafy/
+
+# Claude Code internal
+.claude/
+
+# Raw data directories (large GeoPackage files)
+bdot10k/
+mpzp-pomorskie/
+
+# External dependencies (cloned repos)
+semantica/

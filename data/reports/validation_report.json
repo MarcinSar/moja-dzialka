@@ -1,0 +1,610 @@
+{
+  "timestamp": "2026-01-18T15:27:30.100689",
+  "parcels": {
+    "file": "/root/moja-dzialka/data/raw/dzialki_pomorskie.gpkg",
+    "exists": true,
+    "timestamp": "2026-01-18T15:27:30.100900",
+    "file_size_mb": 428.36328125,
+    "record_count": 1300779,
+    "crs": {
+      "valid": true,
+      "expected": "EPSG:2180",
+      "actual": "EPSG:2180"
+    },
+    "geometry": {
+      "total": 1300779,
+      "valid": 1300776,
+      "invalid": 3,
+      "empty": 0,
+      "null": 0,
+      "valid_ratio": 0.9999976936897044,
+      "types": {
+        "Polygon": 1300779
+      }
+    },
+    "area_stats": {
+      "min": 0.005642311459182021,
+      "max": 179217312.68625867,
+      "mean": 14162.18622466098,
+      "median": 1198.7007722331855,
+      "std": 237105.74529828635
+    },
+    "attributes": {
+      "columns": [
+        "ID_DZIALKI",
+        "TERYT_POWIAT",
+        "geometry"
+      ],
+      "null_counts": {
+        "ID_DZIALKI": 0,
+        "TERYT_POWIAT": 0
+      },
+      "null_ratios": {
+        "ID_DZIALKI": 0.0,
+        "TERYT_POWIAT": 0.0
+      },
+      "potential_id_columns": [
+        "ID_DZIALKI"
+      ]
+    },
+    "bounds": {
+      "minx": 350843.5659174323,
+      "miny": 626315.0643457351,
+      "maxx": 542048.090175712,
+      "maxy": 775019.1449917816
+    },
+    "validation_passed": true
+  },
+  "bdot10k": {
+    "directory": "/root/moja-dzialka/data/raw/bdot10k",
+    "exists": true,
+    "timestamp": "2026-01-18T15:30:55.194180",
+    "layers": {
+      "22_OT_ADJA_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_ADJA_A.gpkg",
+        "record_count": 212,
+        "crs_valid": true,
+        "size_mb": 7.71484375
+      },
+      "22_OT_ADMS_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_ADMS_A.gpkg",
+        "record_count": 4094,
+        "crs_valid": true,
+        "size_mb": 14.82421875
+      },
+      "22_OT_ADMS_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_ADMS_P.gpkg",
+        "record_count": 4089,
+        "crs_valid": true,
+        "size_mb": 1.2109375
+      },
+      "22_OT_BUBD_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUBD_A.gpkg",
+        "record_count": 695642,
+        "crs_valid": true,
+        "size_mb": 381.41015625
+      },
+      "22_OT_BUHD_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUHD_A.gpkg",
+        "record_count": 17,
+        "crs_valid": true,
+        "size_mb": 0.09765625
+      },
+      "22_OT_BUHD_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUHD_L.gpkg",
+        "record_count": 505,
+        "crs_valid": true,
+        "size_mb": 0.2578125
+      },
+      "22_OT_BUIB_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUIB_A.gpkg",
+        "record_count": 283,
+        "crs_valid": true,
+        "size_mb": 0.23046875
+      },
+      "22_OT_BUIB_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUIB_L.gpkg",
+        "record_count": 138,
+        "crs_valid": true,
+        "size_mb": 0.13671875
+      },
+      "22_OT_BUIN_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUIN_L.gpkg",
+        "record_count": 3629,
+        "crs_valid": true,
+        "size_mb": 1.41796875
+      },
+      "22_OT_BUIT_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUIT_A.gpkg",
+        "record_count": 123,
+        "crs_valid": true,
+        "size_mb": 0.15234375
+      },
+      "22_OT_BUIT_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUIT_P.gpkg",
+        "record_count": 14961,
+        "crs_valid": true,
+        "size_mb": 4.05078125
+      },
+      "22_OT_BUSP_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUSP_A.gpkg",
+        "record_count": 8870,
+        "crs_valid": true,
+        "size_mb": 3.81640625
+      },
+      "22_OT_BUSP_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUSP_L.gpkg",
+        "record_count": 599,
+        "crs_valid": true,
+        "size_mb": 0.43359375
+      },
+      "22_OT_BUTR_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUTR_L.gpkg",
+        "record_count": 628,
+        "crs_valid": true,
+        "size_mb": 0.29296875
+      },
+      "22_OT_BUTR_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUTR_P.gpkg",
+        "record_count": 7,
+        "crs_valid": true,
+        "size_mb": 0.0859375
+      },
+      "22_OT_BUUO_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUUO_L.gpkg",
+        "record_count": 5476,
+        "crs_valid": true,
+        "size_mb": 2.12109375
+      },
+      "22_OT_BUWT_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUWT_P.gpkg",
+        "record_count": 11289,
+        "crs_valid": true,
+        "size_mb": 3.21484375
+      },
+      "22_OT_BUZM_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUZM_L.gpkg",
+        "record_count": 39535,
+        "crs_valid": true,
+        "size_mb": 16.7421875
+      },
+      "22_OT_BUZT_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUZT_A.gpkg",
+        "record_count": 1971,
+        "crs_valid": true,
+        "size_mb": 1.21484375
+      },
+      "22_OT_BUZT_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUZT_P.gpkg",
+        "record_count": 11333,
+        "crs_valid": true,
+        "size_mb": 3.11328125
+      },
+      "22_OT_KUHO_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUHO_A.gpkg",
+        "record_count": 654,
+        "crs_valid": true,
+        "size_mb": 0.55859375
+      },
+      "22_OT_KUHU_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUHU_A.gpkg",
+        "record_count": 40,
+        "crs_valid": true,
+        "size_mb": 0.11328125
+      },
+      "22_OT_KUKO_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUKO_A.gpkg",
+        "record_count": 1040,
+        "crs_valid": true,
+        "size_mb": 0.78125
+      },
+      "22_OT_KUKO_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUKO_P.gpkg",
+        "record_count": 154,
+        "crs_valid": true,
+        "size_mb": 0.1328125
+      },
+      "22_OT_KUMN_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUMN_A.gpkg",
+        "record_count": 510,
+        "crs_valid": true,
+        "size_mb": 0.8984375
+      },
+      "22_OT_KUOS_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUOS_A.gpkg",
+        "record_count": 1092,
+        "crs_valid": true,
+        "size_mb": 0.8671875
+      },
+      "22_OT_KUOZ_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUOZ_A.gpkg",
+        "record_count": 143,
+        "crs_valid": true,
+        "size_mb": 0.203125
+      },
+      "22_OT_KUPG_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUPG_A.gpkg",
+        "record_count": 3795,
+        "crs_valid": true,
+        "size_mb": 2.9453125
+      },
+      "22_OT_KUPG_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUPG_P.gpkg",
+        "record_count": 111,
+        "crs_valid": true,
+        "size_mb": 0.12109375
+      },
+      "22_OT_KUPW_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUPW_A.gpkg",
+        "record_count": 7,
+        "crs_valid": true,
+        "size_mb": 0.09765625
+      },
+      "22_OT_KUSC_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUSC_A.gpkg",
+        "record_count": 1430,
+        "crs_valid": true,
+        "size_mb": 0.890625
+      },
+      "22_OT_KUSK_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUSK_A.gpkg",
+        "record_count": 1366,
+        "crs_valid": true,
+        "size_mb": 1.37109375
+      },
+      "22_OT_KUZA_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_KUZA_A.gpkg",
+        "record_count": 170,
+        "crs_valid": true,
+        "size_mb": 0.2734375
+      },
+      "22_OT_OIKM_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIKM_A.gpkg",
+        "record_count": 18,
+        "crs_valid": true,
+        "size_mb": 0.09765625
+      },
+      "22_OT_OIKM_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIKM_L.gpkg",
+        "record_count": 382,
+        "crs_valid": true,
+        "size_mb": 0.23828125
+      },
+      "22_OT_OIKM_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIKM_P.gpkg",
+        "record_count": 10554,
+        "crs_valid": true,
+        "size_mb": 3.2109375
+      },
+      "22_OT_OIMK_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIMK_A.gpkg",
+        "record_count": 17835,
+        "crs_valid": true,
+        "size_mb": 14.05859375
+      },
+      "22_OT_OIOR_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIOR_A.gpkg",
+        "record_count": 2252,
+        "crs_valid": true,
+        "size_mb": 0.9609375
+      },
+      "22_OT_OIOR_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIOR_L.gpkg",
+        "record_count": 6879,
+        "crs_valid": true,
+        "size_mb": 2.30078125
+      },
+      "22_OT_OIOR_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIOR_P.gpkg",
+        "record_count": 9837,
+        "crs_valid": true,
+        "size_mb": 2.75
+      },
+      "22_OT_OIPR_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIPR_L.gpkg",
+        "record_count": 131709,
+        "crs_valid": true,
+        "size_mb": 50.15625
+      },
+      "22_OT_OIPR_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIPR_P.gpkg",
+        "record_count": 422511,
+        "crs_valid": true,
+        "size_mb": 131.55078125
+      },
+      "22_OT_OISZ_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OISZ_A.gpkg",
+        "record_count": 6634,
+        "crs_valid": true,
+        "size_mb": 6.6953125
+      },
+      "22_OT_PTGN_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTGN_A.gpkg",
+        "record_count": 586,
+        "crs_valid": true,
+        "size_mb": 0.9765625
+      },
+      "22_OT_PTKM_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTKM_A.gpkg",
+        "record_count": 474,
+        "crs_valid": true,
+        "size_mb": 4.9375
+      },
+      "22_OT_PTLZ_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTLZ_A.gpkg",
+        "record_count": 75577,
+        "crs_valid": true,
+        "size_mb": 94.59765625
+      },
+      "22_OT_PTNZ_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTNZ_A.gpkg",
+        "record_count": 3054,
+        "crs_valid": true,
+        "size_mb": 1.890625
+      },
+      "22_OT_PTPL_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTPL_A.gpkg",
+        "record_count": 8478,
+        "crs_valid": true,
+        "size_mb": 4.7890625
+      },
+      "22_OT_PTRK_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTRK_A.gpkg",
+        "record_count": 5361,
+        "crs_valid": true,
+        "size_mb": 4.44140625
+      },
+      "22_OT_PTSO_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTSO_A.gpkg",
+        "record_count": 47,
+        "crs_valid": true,
+        "size_mb": 0.12109375
+      },
+      "22_OT_PTTR_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTTR_A.gpkg",
+        "record_count": 84205,
+        "crs_valid": true,
+        "size_mb": 135.8984375
+      },
+      "22_OT_PTUT_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTUT_A.gpkg",
+        "record_count": 5802,
+        "crs_valid": true,
+        "size_mb": 3.41796875
+      },
+      "22_OT_PTWP_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTWP_A.gpkg",
+        "record_count": 49670,
+        "crs_valid": true,
+        "size_mb": 44.18359375
+      },
+      "22_OT_PTWZ_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTWZ_A.gpkg",
+        "record_count": 331,
+        "crs_valid": true,
+        "size_mb": 0.59765625
+      },
+      "22_OT_PTZB_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTZB_A.gpkg",
+        "record_count": 104649,
+        "crs_valid": true,
+        "size_mb": 64.03125
+      },
+      "22_OT_RTLW_l": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_RTLW_l.gpkg",
+        "record_count": 782963,
+        "crs_valid": true,
+        "size_mb": 998.4453125
+      },
+      "22_OT_RTPW_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_RTPW_P.gpkg",
+        "record_count": 26873,
+        "crs_valid": true,
+        "size_mb": 6.95703125
+      },
+      "22_OT_SKDR_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKDR_L.gpkg",
+        "record_count": 411575,
+        "crs_valid": true,
+        "size_mb": 212.03515625
+      },
+      "22_OT_SKJZ_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKJZ_L.gpkg",
+        "record_count": 418616,
+        "crs_valid": true,
+        "size_mb": 230.9140625
+      },
+      "22_OT_SKPP_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKPP_L.gpkg",
+        "record_count": 16,
+        "crs_valid": true,
+        "size_mb": 0.09375
+      },
+      "22_OT_SKRP_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKRP_L.gpkg",
+        "record_count": 67691,
+        "crs_valid": true,
+        "size_mb": 30.7734375
+      },
+      "22_OT_SKRW_P": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKRW_P.gpkg",
+        "record_count": 674,
+        "crs_valid": true,
+        "size_mb": 0.2578125
+      },
+      "22_OT_SKTR_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKTR_L.gpkg",
+        "record_count": 8221,
+        "crs_valid": true,
+        "size_mb": 4.56640625
+      },
+      "22_OT_SULN_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SULN_L.gpkg",
+        "record_count": 20239,
+        "crs_valid": true,
+        "size_mb": 8.25390625
+      },
+      "22_OT_SUPR_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SUPR_L.gpkg",
+        "record_count": 963,
+        "crs_valid": true,
+        "size_mb": 0.44921875
+      },
+      "22_OT_SWKN_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SWKN_L.gpkg",
+        "record_count": 695,
+        "crs_valid": true,
+        "size_mb": 0.83984375
+      },
+      "22_OT_SWRM_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SWRM_L.gpkg",
+        "record_count": 222463,
+        "crs_valid": true,
+        "size_mb": 89.03515625
+      },
+      "22_OT_SWRS_L": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SWRS_L.gpkg",
+        "record_count": 15410,
+        "crs_valid": true,
+        "size_mb": 18.4609375
+      },
+      "22_OT_TCON_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_TCON_A.gpkg",
+        "record_count": 456,
+        "crs_valid": true,
+        "size_mb": 2.46875
+      },
+      "22_OT_TCPK_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_TCPK_A.gpkg",
+        "record_count": 281,
+        "crs_valid": true,
+        "size_mb": 0.58984375
+      },
+      "22_OT_TCPN_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_TCPN_A.gpkg",
+        "record_count": 32,
+        "crs_valid": true,
+        "size_mb": 0.1640625
+      },
+      "22_OT_TCRZ_A": {
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_TCRZ_A.gpkg",
+        "record_count": 179,
+        "crs_valid": true,
+        "size_mb": 0.4921875
+      }
+    },
+    "total_files": 72,
+    "total_size_mb": 2628.4921875,
+    "critical_layers_status": {
+      "BUBD_A": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_BUBD_A.gpkg",
+        "record_count": 695642
+      },
+      "SKDR_L": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKDR_L.gpkg",
+        "record_count": 411575
+      },
+      "SKJZ_L": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_SKJZ_L.gpkg",
+        "record_count": 418616
+      },
+      "PTLZ_A": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTLZ_A.gpkg",
+        "record_count": 75577
+      },
+      "PTWP_A": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_PTWP_A.gpkg",
+        "record_count": 49670
+      },
+      "OIKM_P": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_OIKM_P.gpkg",
+        "record_count": 10554
+      },
+      "ADJA_A": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_ADJA_A.gpkg",
+        "record_count": 212
+      },
+      "ADMS_A": {
+        "exists": true,
+        "file": "PL.PZGiK.336.BDOT10k.22_OT_ADMS_A.gpkg",
+        "record_count": 4094
+      }
+    },
+    "total_records": 3738105,
+    "missing_critical_layers": [],
+    "validation_passed": true
+  },
+  "mpzp": {
+    "file": "/root/moja-dzialka/data/raw/mpzp_pomorskie_coverage.gpkg",
+    "exists": true,
+    "timestamp": "2026-01-18T15:30:56.604401",
+    "file_size_mb": 21.32421875,
+    "record_count": 14473,
+    "crs": {
+      "valid": true,
+      "expected": "EPSG:2180",
+      "actual": "EPSG:2180"
+    },
+    "geometry": {
+      "total": 14473,
+      "valid": 14473,
+      "invalid": 0,
+      "empty": 0,
+      "valid_ratio": 1.0,
+      "types": {
+        "MultiPolygon": 14473
+      }
+    },
+    "coverage": {
+      "total_area_km2": 5066.692805940707,
+      "plan_count": 14473,
+      "unique_teryts": 103
+    },
+    "attributes": {
+      "columns": [
+        "teryt",
+        "tytul",
+        "data_uchwalenia",
+        "obowiazuje_od",
+        "typ_planu",
+        "status",
+        "link_uchwala",
+        "link_rysunek",
+        "numer_uchwaly",
+        "lokalny_id",
+        "przestrzen_nazw",
+        "source_file",
+        "geometry"
+      ],
+      "null_counts": {
+        "teryt": {
+          "count": 0,
+          "ratio": 0.0
+        },
+        "status": {
+          "count": 0,
+          "ratio": 0.0
+        },
+        "data_uchwalenia": {
+          "count": 7757,
+          "ratio": 0.5359635182754093
+        }
+      }
+    },
+    "bounds": {
+      "minx": 355168.396,
+      "miny": 626884.151,
+      "maxx": 540212.163,
+      "maxy": 774833.338
+    },
+    "validation_passed": true
+  },
+  "all_validations_passed": true
+}
