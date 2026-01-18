@@ -328,12 +328,52 @@ redis_cache = RedisManager()
 
 async def check_all_connections() -> dict:
     """Check health of all database connections."""
+    import time
     results = {}
 
-    results["postgis"] = await postgis.health_check()
-    results["neo4j"] = await neo4j.health_check()
-    results["milvus"] = await milvus.health_check()
-    results["redis"] = await redis_cache.health_check()
+    # PostGIS
+    start = time.time()
+    try:
+        connected = await postgis.health_check()
+        results["postgis"] = {
+            "connected": connected,
+            "latency_ms": int((time.time() - start) * 1000)
+        }
+    except Exception as e:
+        results["postgis"] = {"connected": False, "error": str(e)}
+
+    # Neo4j
+    start = time.time()
+    try:
+        connected = await neo4j.health_check()
+        results["neo4j"] = {
+            "connected": connected,
+            "latency_ms": int((time.time() - start) * 1000)
+        }
+    except Exception as e:
+        results["neo4j"] = {"connected": False, "error": str(e)}
+
+    # Milvus
+    start = time.time()
+    try:
+        connected = await milvus.health_check()
+        results["milvus"] = {
+            "connected": connected,
+            "latency_ms": int((time.time() - start) * 1000)
+        }
+    except Exception as e:
+        results["milvus"] = {"connected": False, "error": str(e)}
+
+    # Redis
+    start = time.time()
+    try:
+        connected = await redis_cache.health_check()
+        results["redis"] = {
+            "connected": connected,
+            "latency_ms": int((time.time() - start) * 1000)
+        }
+    except Exception as e:
+        results["redis"] = {"connected": False, "error": str(e)}
 
     return results
 

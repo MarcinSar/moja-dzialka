@@ -62,7 +62,7 @@ class SpatialService:
             List of parcel dictionaries
         """
         # Build WHERE conditions
-        conditions = ["ST_DWithin(geom, center_point, :radius)"]
+        conditions = ["ST_DWithin(p.geom, center_point.geom, :radius)"]
         query_params = {
             "lat": params.lat,
             "lon": params.lon,
@@ -425,6 +425,121 @@ class SpatialService:
         except Exception as e:
             logger.error(f"Get gminy error: {e}")
             return []
+
+    async def list_gminy(self) -> List[str]:
+        """Alias for get_gminy_list."""
+        return await self.get_gminy_list()
+
+    async def get_gmina_statistics(self, gmina_name: str) -> Optional[Dict[str, Any]]:
+        """Get statistics for a specific gmina."""
+        query = """
+            SELECT
+                gmina,
+                teryt_powiat as teryt,
+                COUNT(*) as parcel_count,
+                AVG(area_m2) as avg_area_m2,
+                100.0 * SUM(CASE WHEN has_mpzp THEN 1 ELSE 0 END) / COUNT(*) as mpzp_coverage_pct,
+                ARRAY_AGG(DISTINCT miejscowosc) FILTER (WHERE miejscowosc IS NOT NULL) as miejscowosci
+            FROM parcels
+            WHERE gmina = :gmina_name
+            GROUP BY gmina, teryt_powiat
+        """
+        try:
+            results = await postgis.execute(query, {"gmina_name": gmina_name})
+            if results:
+                row = results[0]._mapping
+                return {
+                    "gmina": row["gmina"],
+                    "teryt": row["teryt"],
+                    "parcel_count": row["parcel_count"],
+                    "avg_area_m2": float(row["avg_area_m2"]) if row["avg_area_m2"] else None,
+                    "mpzp_coverage_pct": float(row["mpzp_coverage_pct"]) if row["mpzp_coverage_pct"] else 0,
+                    "miejscowosci": row["miejscowosci"] or [],
+                }
+            return None
+        except Exception as e:
+            logger.error(f"Get gmina statistics error: {e}")
+            return None
+
+    async def generate_geojson(
+        self,
+        parcel_ids: List[str],
+        include_geometry: bool = True
+    ) -> Optional[Dict[str, Any]]:
+        """Generate GeoJSON FeatureCollection for parcels."""
+        if not parcel_ids:
+            return None
+
+        query = f"""
+            SELECT
+                id_dzialki,
+                gmina,
+                miejscowosc,
+                area_m2,
+                quietness_score,
+                nature_score,
+                accessibility_score,
+                has_mpzp,
+                mpzp_symbol,
+                centroid_lat,
+                centroid_lon,
+                ST_AsGeoJSON(ST_Transform(geom, {self.WGS84_CRS}))::json as geometry
+            FROM parcels
+            WHERE id_dzialki = ANY(:parcel_ids)
+        """
+
+        try:
+            results = await postgis.execute(query, {"parcel_ids": parcel_ids})
+
+            features = []
+            min_lat, max_lat = float('inf'), float('-inf')
+            min_lon, max_lon = float('inf'), float('-inf')
+
+            for row in results:
+                r = row._mapping
+                feature = {
+                    "type": "Feature",
+                    "properties": {
+                        "id_dzialki": r["id_dzialki"],
+                        "gmina": r["gmina"],
+                        "miejscowosc": r["miejscowosc"],
+                        "area_m2": r["area_m2"],
+                        "quietness_score": r["quietness_score"],
+                        "nature_score": r["nature_score"],
+                        "accessibility_score": r["accessibility_score"],
+                        "has_mpzp": r["has_mpzp"],
+                        "mpzp_symbol": r["mpzp_symbol"],
+                    },
+                    "geometry": r["geometry"] if include_geometry else None,
+                }
+                features.append(feature)
+
+                # Track bounds
+                if r["centroid_lat"] and r["centroid_lon"]:
+                    min_lat = min(min_lat, r["centroid_lat"])
+                    max_lat = max(max_lat, r["centroid_lat"])
+                    min_lon = min(min_lon, r["centroid_lon"])
+                    max_lon = max(max_lon, r["centroid_lon"])
+
+            geojson = {
+                "type": "FeatureCollection",
+                "features": features,
+            }
+
+            # Calculate center
+            center_lat = (min_lat + max_lat) / 2 if features else None
+            center_lon = (min_lon + max_lon) / 2 if features else None
+
+            return {
+                "geojson": geojson,
+                "bounds": [[min_lat, min_lon], [max_lat, max_lon]] if features else None,
+                "center": [center_lat, center_lon] if features else None,
+                "parcel_count": len(features),
+            }
+
+        except Exception as e:
+            logger.error(f"Generate GeoJSON error: {e}")
+            return None
 
 
 # Global instance

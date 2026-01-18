@@ -118,11 +118,15 @@ class HybridSearchService:
         # Collect results from each source in parallel
         tasks = []
 
+        # Helper for empty async result
+        async def empty_result():
+            return []
+
         # 1. Spatial search (if location provided)
         if preferences.lat and preferences.lon:
             tasks.append(self._spatial_search(preferences, limit * 2))
         else:
-            tasks.append(asyncio.coroutine(lambda: [])())
+            tasks.append(empty_result())
 
         # 2. Vector similarity search (if reference parcel or preferences)
         if preferences.reference_parcel_id:
@@ -130,13 +134,13 @@ class HybridSearchService:
         elif preferences.quietness_weight or preferences.nature_weight:
             tasks.append(self._vector_search_preferences(preferences, limit * 2))
         else:
-            tasks.append(asyncio.coroutine(lambda: [])())
+            tasks.append(empty_result())
 
         # 3. Graph search (for MPZP filtering)
         if preferences.mpzp_symbol or preferences.mpzp_budowlane:
             tasks.append(self._graph_search(preferences, limit * 2))
         else:
-            tasks.append(asyncio.coroutine(lambda: [])())
+            tasks.append(empty_result())
 
         # Execute all searches
         results = await asyncio.gather(*tasks, return_exceptions=True)
