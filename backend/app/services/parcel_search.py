@@ -254,6 +254,8 @@ class HybridSearchService:
                 "gmina": r.gmina,
                 "area_m2": r.area_m2,
                 "quietness_score": r.quietness_score,
+                "nature_score": r.nature_score,
+                "accessibility_score": r.accessibility_score,
                 "_source": "vector",
                 "_rank": i + 1,
             }
@@ -329,9 +331,13 @@ class HybridSearchService:
                 rank = r.get("_rank", len(vector_results))
                 parcel_scores[pid]["score"] += self.VECTOR_WEIGHT / (self.RRF_K + rank)
                 parcel_scores[pid]["sources"].append("vector")
-                # Don't overwrite spatial data, just add vector-specific
+                # Add vector data - don't overwrite existing values from spatial
+                existing_data = parcel_scores[pid]["data"]
+                for key in ["gmina", "area_m2", "quietness_score", "nature_score", "accessibility_score"]:
+                    if key in r and r[key] is not None and existing_data.get(key) is None:
+                        existing_data[key] = r[key]
                 if "similarity_score" in r:
-                    parcel_scores[pid]["data"]["similarity_score"] = r["similarity_score"]
+                    existing_data["similarity_score"] = r["similarity_score"]
 
         # Process graph results
         for r in graph_results:

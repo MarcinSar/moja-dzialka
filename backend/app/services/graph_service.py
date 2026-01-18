@@ -57,10 +57,10 @@ class GraphService:
                 powiat,
                 size(dzialki) as parcel_count,
                 CASE WHEN size(dzialki) > 0
-                    THEN avg([d IN dzialki | d.area_m2])
+                    THEN reduce(s = 0.0, d IN dzialki | s + coalesce(d.area_m2, 0.0)) / size(dzialki)
                     ELSE null END as avg_area,
                 CASE WHEN size(dzialki) > 0
-                    THEN toFloat(size([d IN dzialki WHERE d.has_mpzp])) / size(dzialki) * 100
+                    THEN toFloat(size([d IN dzialki WHERE d.has_mpzp = true])) / size(dzialki) * 100
                     ELSE null END as pct_with_mpzp
         """
 

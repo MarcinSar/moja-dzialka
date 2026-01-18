@@ -200,15 +200,38 @@ class MilvusManager:
             self._connected = True
             logger.info(f"Milvus connected: {settings.milvus_host}:{settings.milvus_port}")
 
-    def get_collection(self) -> Optional[Collection]:
+    def get_collection(self, fresh: bool = False) -> Optional[Collection]:
         """Get parcels collection."""
         self.connect()
         if utility.has_collection(self.COLLECTION_NAME):
-            if self._collection is None:
+            if fresh or self._collection is None:
+                # Create fresh collection reference
                 self._collection = Collection(self.COLLECTION_NAME)
                 self._collection.load()
             return self._collection
         return None
+
+    def refresh_collection(self):
+        """Refresh collection reference - call if searches fail."""
+        logger.info("Refreshing Milvus collection and reconnecting...")
+        # Release collection
+        if self._collection is not None:
+            try:
+                self._collection.release()
+            except Exception as e:
+                logger.warning(f"Failed to release collection: {e}")
+        self._collection = None
+
+        # Disconnect and reconnect
+        try:
+            connections.disconnect("default")
+        except Exception:
+            pass
+        self._connected = False
+
+        # Force reconnect and reload
+        self.connect()
+        self.get_collection()
 
     def search(
         self,
@@ -216,6 +239,7 @@ class MilvusManager:
         top_k: int = 10,
         filter_expr: str = None,
         output_fields: list = None,
+        fresh: bool = False,
     ) -> list:
         """
         Search for similar vectors.
@@ -225,10 +249,22 @@ class MilvusManager:
             top_k: Number of results per query
             filter_expr: Milvus filter expression (e.g., "area_m2 > 1000")
             output_fields: Fields to return
+            fresh: If True, create fresh collection reference
 
         Returns:
             List of search results
         """
+        # When filter is used, create completely fresh connection to avoid stale state
+        if filter_expr is not None or fresh:
+            logger.info(f"Creating fresh Milvus connection for search with filter: {filter_expr}")
+            try:
+                connections.disconnect("default")
+                logger.info("Disconnected from Milvus")
+            except Exception as e:
+                logger.warning(f"Disconnect failed: {e}")
+            self._connected = False
+            self._collection = None
+
         collection = self.get_collection()
         if collection is None:
             return []

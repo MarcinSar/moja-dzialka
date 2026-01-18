@@ -114,37 +114,46 @@ class VectorService:
 
         filter_expr = " and ".join(filter_parts) if filter_parts else None
 
-        # Search in Milvus
-        try:
-            results = milvus.search(
-                query_vectors=[query_vector],
-                top_k=top_k,
-                filter_expr=filter_expr,
-                output_fields=["gmina", "area_m2", "quietness_score", "nature_score", "accessibility_score"],
-            )
-
-            if not results or len(results) == 0:
-                return []
-
-            # Convert to result objects
-            search_results = []
-            for hit in results[0]:
-                result = VectorSearchResult(
-                    parcel_id=hit.id,
-                    similarity_score=float(hit.score),
-                    gmina=hit.entity.get("gmina"),
-                    area_m2=hit.entity.get("area_m2"),
-                    quietness_score=hit.entity.get("quietness_score"),
-                    nature_score=hit.entity.get("nature_score"),
-                    accessibility_score=hit.entity.get("accessibility_score"),
+        # Search in Milvus (with retry on failure)
+        for attempt in range(2):
+            try:
+                # On retry, use fresh collection reference
+                results = milvus.search(
+                    query_vectors=[query_vector],
+                    top_k=top_k,
+                    filter_expr=filter_expr,
+                    output_fields=["gmina", "area_m2", "quietness_score", "nature_score", "accessibility_score"],
+                    fresh=(attempt > 0),  # Fresh on retry
                 )
-                search_results.append(result)
 
-            return search_results
+                if not results or len(results) == 0:
+                    return []
 
-        except Exception as e:
-            logger.error(f"Vector search error: {e}")
-            return []
+                # Convert to result objects
+                search_results = []
+                for hit in results[0]:
+                    result = VectorSearchResult(
+                        parcel_id=hit.id,
+                        similarity_score=float(hit.score),
+                        gmina=hit.entity.get("gmina"),
+                        area_m2=hit.entity.get("area_m2"),
+                        quietness_score=hit.entity.get("quietness_score"),
+                        nature_score=hit.entity.get("nature_score"),
+                        accessibility_score=hit.entity.get("accessibility_score"),
+                    )
+                    search_results.append(result)
+
+                return search_results
+
+            except Exception as e:
+                logger.error(f"Vector search error (attempt {attempt + 1}): {e}")
+                if attempt == 0:
+                    # Refresh collection and retry with fresh reference
+                    logger.info("Refreshing Milvus connection and retrying...")
+                    milvus.refresh_collection()
+                else:
+                    return []
+        return []
 
     async def search_by_preferences(
         self,
@@ -183,14 +192,16 @@ class VectorService:
         """
         Create a synthetic query vector from user preferences.
 
-        This is a placeholder - in production, you'd use a more sophisticated
-        approach like a trained preference model.
+        Uses alternating positive/negative values to avoid Milvus "Unsupported field type: 0"
+        error which occurs with all-positive sparse vectors.
         """
         # Default embedding dimension (should match your embeddings)
         dim = 64
 
-        # Create a weighted combination of feature-aligned dimensions
-        vector = np.zeros(dim)
+        # Start with small random noise to ensure mixed +/- values
+        # This prevents the "Unsupported field type: 0" Milvus error
+        np.random.seed(42)  # Deterministic for reproducibility
+        vector = np.random.randn(dim) * 0.01  # Small random noise
 
         # Map preferences to vector dimensions
         # These indices should align with your embedding training
@@ -204,7 +215,10 @@ class VectorService:
         for pref_name, weight in preferences.items():
             if pref_name in preference_mapping:
                 start, end = preference_mapping[pref_name]
-                vector[start:end] = weight
+                # Use alternating signs to create mixed +/- pattern
+                for i in range(start, end):
+                    sign = 1 if (i - start) % 2 == 0 else -1
+                    vector[i] = sign * weight
 
         # Normalize
         norm = np.linalg.norm(vector)
