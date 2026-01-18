@@ -36,7 +36,17 @@ Interaktywny agent AI (z awatarem/postacią) który:
 | 3. MPZP | `02_clean_mpzp.py` | 14,473 stref planistycznych |
 | 4. Działki | `02_clean_parcels.py` | 1,300,779 działek z land cover |
 | 5. Features | `03_feature_engineering.py` | **36 cech obliczonych** |
-| 6. Dev sample | `04_create_dev_sample.py` | 10,471 działek testowych |
+| 6. Admin data | `03b_enrich_admin_data.py` | Wzbogacenie o gminy/powiaty z BDOT10k |
+| 7. Dev sample | `04_create_dev_sample.py` | 10,471 działek testowych |
+
+### UKOŃCZONE: Import danych do baz (dev sample)
+
+| Skrypt | Baza | Status | Wynik |
+|--------|------|--------|-------|
+| `05_import_postgis.py` | PostGIS | ✅ Zaimportowane | 10,471 działek z geometrią |
+| `06_import_neo4j.py` | Neo4j | ✅ Zaimportowane | 10,886 węzłów, 138,672 relacji |
+| `07_generate_srai.py` | Parquet | ✅ Wygenerowane | 10,471 embeddingów (64-dim) |
+| `08_import_milvus.py` | Milvus | ✅ Zaimportowane | 10,471 wektorów |
 
 ### UKOŃCZONE: Backend Services
 
@@ -69,15 +79,6 @@ Interaktywny agent AI (z awatarem/postacią) który:
 | `/api/v1/search/map` | POST | GeoJSON map data |
 | `/api/v1/search/gminy` | GET | List of gminy |
 | `/api/v1/search/mpzp-symbols` | GET | MPZP symbol definitions |
-
-### PENDING: Import danych do baz
-
-| Skrypt | Baza | Status |
-|--------|------|--------|
-| `05_import_postgis.py` | PostGIS | Gotowy (--sample) |
-| `06_import_neo4j.py` | Neo4j | Gotowy (--sample) |
-| `07_generate_srai.py` | Parquet | Gotowy (--sample) |
-| `08_import_milvus.py` | Milvus | Gotowy (--sample) |
 
 ### PENDING: Frontend
 
@@ -115,13 +116,142 @@ Interaktywny agent AI (z awatarem/postacią) który:
 └────────────────────────────┬────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────────────┐
-│                       DATA LAYER                                     │
+│                       DATA LAYER (dev sample)                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐               │
 │  │   PostGIS    │  │    Neo4j     │  │   Milvus     │               │
 │  │  (geometrie) │  │   (graf)     │  │  (wektory)   │               │
-│  │  888k działek│  │  relacje     │  │  embeddings  │               │
+│  │ 10,471 dział.│  │ 10,886 nodes │  │ 10,471 vec.  │               │
+│  │ 38 kolumn    │  │ 138,672 rels │  │ 64-dim SRAI  │               │
 │  └──────────────┘  └──────────────┘  └──────────────┘               │
 └──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Zawartość baz danych (dev sample)
+
+### PostGIS - Dane przestrzenne
+
+**Tabela `parcels`**: 10,471 działek z pełną geometrią (EPSG:2180)
+
+| Kategoria | Kolumny | Opis |
+|-----------|---------|------|
+| Identyfikacja | `id_dzialki`, `teryt_powiat` | Unikalne ID działki |
+| Geometria | `geom`, `centroid_lat`, `centroid_lon`, `area_m2` | Polygon + centroid WGS84 |
+| Lokalizacja | `gmina`, `gmina_teryt`, `powiat`, `powiat_teryt`, `miejscowosc` | Hierarchia administracyjna |
+| Pokrycie terenu | `forest_ratio`, `water_ratio`, `builtup_ratio` | Procent powierzchni |
+| Odległości | `dist_to_school`, `dist_to_shop`, `dist_to_hospital`, `dist_to_bus_stop`, `dist_to_public_road`, `dist_to_main_road`, `dist_to_forest`, `dist_to_water`, `dist_to_industrial` | Metry do najbliższego POI |
+| Bufory 500m | `pct_forest_500m`, `pct_water_500m`, `count_buildings_500m` | Analiza otoczenia |
+| MPZP | `has_mpzp`, `mpzp_symbol`, `mpzp_przeznaczenie` | Plan zagospodarowania |
+| Wskaźniki | `quietness_score`, `nature_score`, `accessibility_score`, `compactness` | Cechy kompozytowe (0-100) |
+| Dostęp | `has_public_road_access` | Boolean - dostęp do drogi |
+
+**Statystyki:**
+- Gminy: 15 (Gdańsk, Pruszcz Gdański, Kolbudy, Żukowo, Somonino...)
+- Powiaty: 3 (gdański, kartuski, Gdańsk miasto)
+- Z MPZP: 6,180 (59%)
+- Z dostępem do drogi: 8,913 (85%)
+
+### Neo4j - Graf wiedzy
+
+**Węzły (15 typów, 10,886 łącznie):**
+
+| Typ węzła | Liczba | Opis |
+|-----------|--------|------|
+| `Dzialka` | 10,471 | Działki z kluczowymi atrybutami |
+| `Miejscowosc` | 337 | Miejscowości (wsie, dzielnice) |
+| `SymbolMPZP` | 19 | Symbole planu (MN, MW, R, ZL...) |
+| `Gmina` | 15 | Gminy pomorskie |
+| `RodzajMiejscowosci` | 7 | Typy: wieś, część wsi, przysiółek, osada... |
+| `CharakterTerenu` | 5 | wiejski, podmiejski, miejski, leśny, mieszany |
+| `POIType` | 5 | school, shop, hospital, bus_stop, industrial |
+| `GestoscZabudowy` | 5 | bardzo_gesta, gesta, umiarkowana, rzadka, bardzo_rzadka |
+| `KategoriaCiszy` | 4 | bardzo_cicha, cicha, umiarkowana, głośna |
+| `KategoriaNatury` | 4 | bardzo_zielona, zielona, umiarkowana, zurbanizowana |
+| `KategoriaDostepu` | 4 | doskonały, dobry, umiarkowany, ograniczony |
+| `KategoriaPowierzchni` | 4 | mala, srednia, duza, bardzo_duza |
+| `Powiat` | 3 | gdański, kartuski, Gdańsk |
+| `LandCoverType` | 2 | forest, water |
+| `Wojewodztwo` | 1 | pomorskie |
+
+**Relacje (19 typów, 138,672 łącznie):**
+
+| Relacja | Liczba | Opis |
+|---------|--------|------|
+| `W_GMINIE` | 10,808 | Dzialka/Miejscowosc → Gmina |
+| `MA_DOSTEP` | 10,471 | Dzialka → KategoriaDostepu |
+| `MA_POWIERZCHNIE` | 10,471 | Dzialka → KategoriaPowierzchni |
+| `MA_ZABUDOWE` | 10,471 | Dzialka → GestoscZabudowy |
+| `MA_CHARAKTER` | 10,471 | Dzialka → CharakterTerenu |
+| `MA_CISZE` | 10,471 | Dzialka → KategoriaCiszy |
+| `W_MIEJSCOWOSCI` | 10,471 | Dzialka → Miejscowosc |
+| `MA_NATURE` | 10,471 | Dzialka → KategoriaNatury |
+| `BLISKO_LASU` | 9,607 | Dzialka → LandCoverType {distance_m} |
+| `BLISKO_WODY` | 9,487 | Dzialka → LandCoverType {distance_m} |
+| `MA_PRZEZNACZENIE` | 6,180 | Dzialka → SymbolMPZP |
+| `BLISKO_SZKOLY` | 10,471 | Dzialka → POIType {distance_m, rank} |
+| `BLISKO_SKLEPU` | 10,471 | Dzialka → POIType {distance_m, rank} |
+| `BLISKO_SZPITALA` | 10,471 | Dzialka → POIType {distance_m, rank} |
+| `BLISKO_PRZYSTANKU` | 10,471 | Dzialka → POIType {distance_m, rank} |
+| `BLISKO_PRZEMYSLU` | 10,471 | Dzialka → POIType {distance_m, rank} |
+| `W_POWIECIE` | 15 | Gmina → Powiat |
+| `W_WOJEWODZTWIE` | 3 | Powiat → Wojewodztwo |
+| `MA_RODZAJ` | 337 | Miejscowosc → RodzajMiejscowosci |
+
+**Hierarchia administracyjna:**
+```
+pomorskie (Wojewodztwo)
+├── gdański (Powiat) - 9 gmin
+│   ├── Pruszcz Gdański - 123 miejscowości
+│   ├── Kolbudy - 45 miejscowości
+│   ├── Żukowo - 67 miejscowości
+│   └── ...
+├── kartuski (Powiat) - 5 gmin
+│   ├── Somonino - 34 miejscowości
+│   └── ...
+└── Gdańsk (Powiat/Miasto) - 1 gmina
+    └── Gdańsk - dzielnice
+```
+
+### Milvus - Embeddingi wektorowe
+
+**Kolekcja `parcels`**: 10,471 wektorów
+
+| Parametr | Wartość |
+|----------|---------|
+| Wymiar wektora | 64 |
+| Metoda | Feature-based (nie SRAI contextual) |
+| Metryka | COSINE |
+| Index | IVF_FLAT (nlist=128) |
+
+**Cechy użyte do embeddingu (20):**
+
+```
+area_m2, forest_ratio, water_ratio, builtup_ratio,
+dist_to_school, dist_to_shop, dist_to_hospital, dist_to_bus_stop,
+dist_to_public_road, dist_to_main_road, dist_to_forest, dist_to_water,
+dist_to_industrial, pct_forest_500m, pct_water_500m, count_buildings_500m,
+quietness_score, nature_score, accessibility_score, compactness
+```
+
+**Metadata w Milvus:**
+- `id` (primary key) - id_dzialki
+- `gmina` - nazwa gminy
+- `area_m2` - powierzchnia
+- `has_mpzp` - boolean
+- `quietness_score` - wskaźnik ciszy
+- `nature_score` - wskaźnik natury
+
+**Przykładowe zapytanie similarity search:**
+```python
+# Znajdź działki podobne do podanej
+results = collection.search(
+    data=[query_embedding],
+    anns_field="embedding",
+    param={"metric_type": "COSINE", "params": {"nprobe": 10}},
+    limit=20,
+    expr="area_m2 >= 800 AND area_m2 <= 1500 AND has_mpzp == true"
+)
 ```
 
 ---
@@ -230,22 +360,30 @@ moja-dzialka/
 ├── scripts/
 │   ├── init-db.sql                    # PostGIS schema
 │   └── pipeline/
-│       ├── 01_validate.py
-│       ├── 02_clean_*.py
-│       ├── 03_feature_engineering.py
-│       ├── 04_create_dev_sample.py
-│       ├── 05_import_postgis.py       # --sample flag
-│       ├── 06_import_neo4j.py         # --sample flag
-│       ├── 07_generate_srai.py        # --sample flag
-│       └── 08_import_milvus.py        # --sample flag
+│       ├── 01_validate.py             # Walidacja danych źródłowych
+│       ├── 02_clean_bdot10k.py        # Czyszczenie BDOT10k (7 warstw)
+│       ├── 02_clean_mpzp.py           # Czyszczenie MPZP (14k stref)
+│       ├── 02_clean_parcels.py        # Czyszczenie działek (1.3M)
+│       ├── 03_feature_engineering.py  # 36 cech obliczonych
+│       ├── 03b_enrich_admin_data.py   # Wzbogacenie o gminy/powiaty z BDOT10k
+│       ├── 04_create_dev_sample.py    # Dev sample (10,471 działek)
+│       ├── 05_import_postgis.py       # Import do PostGIS (--sample)
+│       ├── 06_import_neo4j.py         # Import do Neo4j (--sample)
+│       ├── 07_generate_srai.py        # Generowanie embeddingów (--sample)
+│       └── 08_import_milvus.py        # Import do Milvus (--sample)
 ├── data/
 │   ├── processed/v1.0.0/
 │   │   ├── parcel_features.parquet    # 324 MB, 36 features
 │   │   └── parcel_features.gpkg       # 722 MB, with geometry
 │   └── dev/
-│       ├── parcels_dev.gpkg           # ~10k parcels
-│       ├── bdot10k_dev.gpkg
-│       └── mpzp_dev.gpkg
+│       ├── parcels_dev.gpkg           # 10,471 działek (wzbogacone o admin data)
+│       ├── bdot10k_dev.gpkg           # BDOT10k dla dev area
+│       ├── mpzp_dev.gpkg              # MPZP dla dev area
+│       └── embeddings/
+│           ├── parcel_embeddings.npy      # 10,471 × 64 float32
+│           ├── parcel_embeddings.parquet  # Z metadanymi
+│           ├── parcel_ids.txt             # Lista ID działek
+│           └── embedding_metadata.json    # Konfiguracja embeddingu
 ├── docker-compose.yml
 └── CLAUDE.md
 ```
@@ -308,14 +446,29 @@ GRAPH_WEIGHT = 0.3     # Neo4j (MPZP, relationships)
 docker-compose up -d postgres neo4j milvus redis
 ```
 
+**Konfiguracja połączeń (docker-compose.yml):**
+
+| Baza | Host:Port | User | Password | Database/Collection |
+|------|-----------|------|----------|---------------------|
+| PostGIS | localhost:5432 | app | secret | moja_dzialka |
+| Neo4j | localhost:7687 | neo4j | secretpassword | neo4j |
+| Neo4j Browser | localhost:7474 | - | - | - |
+| Milvus | localhost:19530 | - | - | parcels |
+| Redis | localhost:6379 | - | - | - |
+
 ### 2. Import dev sample
 
 ```bash
 cd scripts/pipeline
-python 05_import_postgis.py --sample
-python 06_import_neo4j.py --sample
-python 07_generate_srai.py --sample
-python 08_import_milvus.py --sample
+
+# 1. Wzbogacenie danych administracyjnych (jeśli nie wykonano)
+python 03b_enrich_admin_data.py --sample
+
+# 2. Import do baz danych
+python 05_import_postgis.py --sample    # ~7s
+python 06_import_neo4j.py --sample      # ~30s
+python 07_generate_srai.py --sample     # ~5s
+python 08_import_milvus.py --sample     # ~3s
 ```
 
 ### 3. Backend
@@ -377,4 +530,4 @@ Location: `/home/marcin/ai-edu/`
 
 ---
 
-*Ostatnia aktualizacja: 2026-01-18 21:30 UTC*
+*Ostatnia aktualizacja: 2026-01-18 22:15 UTC*
