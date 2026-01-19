@@ -1,0 +1,56 @@
+# Celery worker with PotreeConverter 2.0 for LiDAR processing
+FROM python:3.11-slim
+
+# Build arguments
+ARG POTREE_CONVERTER_VERSION=2.1.1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Build tools for PotreeConverter
+    build-essential \
+    cmake \
+    git \
+    # LAStools dependencies
+    libtbb-dev \
+    # Download utilities
+    curl \
+    wget \
+    # Clean up
+    && rm -rf /var/lib/apt/lists/*
+
+# Build PotreeConverter 2.0 from source
+WORKDIR /tmp
+RUN git clone --depth 1 --branch ${POTREE_CONVERTER_VERSION} \
+    https://github.com/potree/PotreeConverter.git \
+    && cd PotreeConverter \
+    && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release \
+    && make -j$(nproc) \
+    && cp PotreeConverter /usr/local/bin/ \
+    && cd / && rm -rf /tmp/PotreeConverter
+
+# Verify installation
+RUN PotreeConverter --help || true
+
+# Set up Python environment
+WORKDIR /app
+
+# Copy requirements and install
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create directories for LiDAR data
+RUN mkdir -p /data/lidar/laz_cache /data/lidar/potree
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Run Celery worker
+CMD ["celery", "-A", "app.tasks", "worker", \
+     "--loglevel=info", \
+     "--queues=lidar", \
+     "--concurrency=2"]

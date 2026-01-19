@@ -15,6 +15,7 @@ from app.config import settings
 from app.services.database import check_all_connections, close_all_connections
 from app.api.conversation import router as conversation_router
 from app.api.search import router as search_router
+from app.api.lidar import router as lidar_router
 
 
 @asynccontextmanager
@@ -61,6 +62,7 @@ app.add_middleware(
 
 app.include_router(conversation_router, prefix="/api/v1")
 app.include_router(search_router, prefix="/api/v1")
+app.include_router(lidar_router, prefix="/api/v1")
 
 
 # =============================================================================
@@ -113,6 +115,12 @@ async def api_info():
                 "gmina": "GET /api/v1/search/gmina/{name}",
                 "mpzp_symbols": "GET /api/v1/search/mpzp-symbols",
                 "stats": "GET /api/v1/search/stats",
+            },
+            "lidar": {
+                "request": "POST /api/v1/lidar/request",
+                "status": "GET /api/v1/lidar/status/{job_id}",
+                "check": "GET /api/v1/lidar/check",
+                "tile": "GET /api/v1/lidar/tile/{tile_id}/{path}",
             },
             "health": {
                 "root": "GET /",

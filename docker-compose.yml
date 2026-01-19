@@ -170,6 +170,7 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/data:ro
+      - lidar_data:/data/lidar
     depends_on:
       postgres:
         condition: service_healthy
@@ -182,6 +183,29 @@ services:
       redis:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  # Celery worker for LiDAR processing
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    container_name: moja-dzialka-celery
+    environment:
+      REDIS_URL: redis://redis:6379
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: moja_dzialka
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+    volumes:
+      - ./backend:/app
+      - lidar_data:/data/lidar
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   # Frontend (development mode)
@@ -212,6 +236,7 @@ volumes:
   milvus_data:
   mongo_data:
   redis_data:
+  lidar_data:
 
 networks:
   default:

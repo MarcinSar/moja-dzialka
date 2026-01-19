@@ -39,14 +39,20 @@ Interaktywny agent AI (z awatarem/postacią) który:
 | 6. Admin data | `03b_enrich_admin_data.py` | Wzbogacenie o gminy/powiaty z BDOT10k |
 | 7. Dev sample | `04_create_dev_sample.py` | 10,471 działek testowych |
 
-### UKOŃCZONE: Import danych do baz (dev sample)
+### UKOŃCZONE: Import PEŁNEGO datasetu do baz (2026-01-19)
 
 | Skrypt | Baza | Status | Wynik |
 |--------|------|--------|-------|
-| `05_import_postgis.py` | PostGIS | ✅ Zaimportowane | 10,471 działek z geometrią |
-| `06_import_neo4j.py` | Neo4j | ✅ Zaimportowane | 10,886 węzłów, 138,672 relacji |
-| `07_generate_srai.py` | Parquet | ✅ Wygenerowane | 10,471 embeddingów (64-dim) |
-| `08_import_milvus.py` | Milvus | ✅ Zaimportowane | 10,471 wektorów |
+| `05_import_postgis.py` | PostGIS | ✅ FULL | **1,300,779 działek**, 110 gmin, 19 powiatów |
+| `06_import_neo4j.py` | Neo4j | ✅ FULL | **1,304,037 węzłów**, 17,024,199 relacji |
+| `07_generate_srai.py` | Parquet | ✅ FULL | **1,300,779 embeddingów** (64-dim) |
+| `08_import_milvus.py` | Milvus | ✅ FULL | **1,300,779 wektorów** |
+
+**Poprawka danych administracyjnych (2026-01-19):**
+- Zintegrowano logikę z `03b_enrich_admin_data.py` do `02_clean_parcels.py`
+- Naprawiono: gmina, powiat, gmina_teryt, powiat_teryt
+- Filtrowanie ADJA_A po `RODZAJ` (gmina vs powiat)
+- Czas pełnego pipeline: ~4-5 godzin
 
 ### UKOŃCZONE: Backend Services
 
@@ -770,4 +776,63 @@ Location: `/home/marcin/ai-edu/`
 
 ---
 
-*Ostatnia aktualizacja: 2026-01-19 (Graph as PRIMARY + 25+ preference fields)*
+## WAŻNE: Kiedy trzeba ponownie uruchomić pipeline?
+
+### ❌ NIE wymaga re-pipeline (bezpieczne zmiany):
+
+| Zmiana | Dlaczego bezpieczne |
+|--------|---------------------|
+| **Zmiany w kodzie aplikacji** (backend, frontend) | Bazy danych pozostają nietknięte |
+| **Nowe endpointy API** | Dane są już w bazach |
+| **Zmiany w agent tools / orchestrator** | To tylko logika wyszukiwania |
+| **Modyfikacje UI / CSS** | Frontend nie dotyka danych |
+| **Nowe warstwy mapy** | Tile layers są zewnętrzne |
+| **Restart backendu** | Dane w Docker volumes |
+| **Restart kontenerów** | Dane persystują w volumes |
+
+### ⚠️ WYMAGA re-pipeline (przetworzenie od nowa):
+
+| Zmiana | Czas | Co robić |
+|--------|------|----------|
+| **Zmiana w `02_clean_parcels.py`** | 30-60 min | Od kroku 2 |
+| **Zmiana w `03_feature_engineering.py`** | 2-3h | Od kroku 3 |
+| **Nowe dane źródłowe (GUGiK, BDOT10k)** | 4-5h | Od kroku 1 |
+| **Zmiana struktury embeddingu** | 15 min | Tylko krok 7+8 |
+| **Zmiana schematu Neo4j** | 30 min | Tylko krok 6 |
+| **`docker volume rm`** na bazach | 1-2h | Tylko import (5-8) |
+
+### 🔧 Jak odtworzyć tylko import (bez feature engineering):
+
+```bash
+cd /root/moja-dzialka/scripts/pipeline
+
+# Jeśli parcel_features.gpkg jest OK, wystarczy:
+python 05_import_postgis.py --clear     # 3 min
+python 06_import_neo4j.py --clear       # 30 min
+python 07_generate_srai.py              # 13 min
+python 08_import_milvus.py              # 5 min
+```
+
+### 📁 Krytyczne pliki danych (NIE KASOWAĆ!):
+
+| Plik | Rozmiar | Opis |
+|------|---------|------|
+| `data/processed/v1.0.0/parcel_features.gpkg` | 722 MB | Pełne dane z geometrią |
+| `data/processed/v1.0.0/parcel_features.parquet` | 324 MB | Szybki dostęp (bez geometrii) |
+| `data/processed/v1.0.0/embeddings/` | ~400 MB | Embeddingi (można regenerować) |
+
+### 🐳 Docker volumes (dane baz):
+
+```bash
+# Sprawdzenie volumes
+docker volume ls | grep moja-dzialka
+
+# UWAGA: To KASUJE wszystkie dane!
+# docker volume rm moja-dzialka_postgres_data
+# docker volume rm moja-dzialka_neo4j_data
+# docker volume rm moja-dzialka_milvus_data
+```
+
+---
+
+*Ostatnia aktualizacja: 2026-01-19 (FULL dataset 1.3M działek zaimportowany)*

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { PhaseTransition } from '@/components/phases/PhaseTransition';
+import { LidarLoadingOverlay, Potree3DViewer } from '@/components/potree';
 import { useChatStore } from '@/stores/chatStore';
 import { useSearchStore } from '@/stores/searchStore';
 import { useUIPhaseStore } from '@/stores/uiPhaseStore';
 import { useParcelRevealStore, generateHighlights, generateExplanation } from '@/stores/parcelRevealStore';
+import { usePotreeStore } from '@/stores/potreeStore';
 import { wsService, parseWSEvent } from '@/services/websocket';
 import { listGminy, getSearchStats } from '@/services/api';
 import type { SearchResultItem } from '@/types';
@@ -13,6 +15,21 @@ function App() {
   const { setConnected, addActivity, startStreaming, appendToLastMessage, finishStreaming } = useChatStore();
   const { setGminy, setLoadingGminy, setMapData } = useSearchStore();
   const { setAvatarMood } = useUIPhaseStore();
+  const { startLoading, updateProgress, setReady, setError } = usePotreeStore();
+
+  // Handle LiDAR request from ParcelRevealCard
+  const handleLidarRequest = useCallback((event: Event) => {
+    const { parcelId, lat, lon } = (event as CustomEvent).detail;
+    console.log('[LiDAR] Request for parcel:', parcelId, 'at', lat, lon);
+
+    // Send request via WebSocket
+    wsService.send({
+      type: 'request_lidar',
+      parcel_id: parcelId,
+      lat,
+      lon,
+    });
+  }, []);
 
   // Initialize WebSocket and fetch initial data
   useEffect(() => {
@@ -29,6 +46,9 @@ function App() {
 
     // Connect WebSocket
     wsService.connect();
+
+    // Listen for LiDAR requests from ParcelRevealCard
+    window.addEventListener('request-lidar', handleLidarRequest);
 
     // Handle connection changes
     const unsubConnection = wsService.onConnectionChange(setConnected);
@@ -201,6 +221,49 @@ function App() {
           // Return to idle on error
           setAvatarMood('idle');
           break;
+
+        // LiDAR events
+        case 'lidar_started':
+          {
+            const data = event.data as { job_id?: string; parcel_id?: string };
+            if (data.job_id && data.parcel_id) {
+              console.log('[LiDAR] Started job:', data.job_id);
+              startLoading(data.parcel_id, data.job_id);
+            }
+          }
+          break;
+
+        case 'lidar_progress':
+          {
+            const data = event.data as { progress?: number; message?: string; status?: string };
+            if (data.progress !== undefined) {
+              console.log('[LiDAR] Progress:', data.progress, data.message);
+              updateProgress(
+                data.progress,
+                data.message || 'Przetwarzanie...',
+                data.status as 'downloading' | 'converting' | undefined
+              );
+            }
+          }
+          break;
+
+        case 'lidar_ready':
+          {
+            const data = event.data as { potree_url?: string; tile_id?: string };
+            if (data.potree_url) {
+              console.log('[LiDAR] Ready:', data.potree_url);
+              setReady(data.potree_url, data.tile_id || '');
+            }
+          }
+          break;
+
+        case 'lidar_error':
+          {
+            const data = event.data as { message?: string };
+            console.error('[LiDAR] Error:', data.message);
+            setError(data.message || 'Błąd przetwarzania LiDAR');
+          }
+          break;
       }
     });
 
@@ -208,12 +271,17 @@ function App() {
       unsubConnection();
       unsubEvents();
       wsService.disconnect();
+      window.removeEventListener('request-lidar', handleLidarRequest);
     };
-  }, []);
+  }, [handleLidarRequest]);
 
   return (
     <div className="h-screen bg-surface overflow-hidden">
       <PhaseTransition stats={stats} />
+
+      {/* LiDAR 3D visualization components */}
+      <LidarLoadingOverlay />
+      <Potree3DViewer />
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import { motion, AnimatePresence } from 'motion/react';
 import { useParcelRevealStore } from '@/stores/parcelRevealStore';
+import { usePotreeStore, isLoading } from '@/stores/potreeStore';
 import { ParcelMiniMap } from './ParcelMiniMap';
 import { MapLayerSwitcher } from './MapLayerSwitcher';
+import { Cube, Loader2 } from 'lucide-react';
 
 export function ParcelRevealCard() {
   const {
@@ -15,6 +17,13 @@ export function ParcelRevealCard() {
     getTotalCount,
   } = useParcelRevealStore();
 
+  const {
+    loadingStatus,
+    potreeUrl,
+    startLoading,
+    openViewer,
+  } = usePotreeStore();
+
   const currentParcelData = getCurrentParcel();
   const totalCount = getTotalCount();
 
@@ -22,6 +31,30 @@ export function ParcelRevealCard() {
 
   const { parcel, explanation, highlights } = currentParcelData;
   const hasCoordinates = parcel.centroid_lat !== null && parcel.centroid_lon !== null;
+  const is3DLoading = isLoading();
+  const has3DData = potreeUrl !== null && loadingStatus === 'ready';
+
+  // Request 3D terrain view via WebSocket
+  const request3DView = () => {
+    if (!hasCoordinates || is3DLoading) return;
+
+    // If we already have 3D data, just open the viewer
+    if (has3DData) {
+      openViewer();
+      return;
+    }
+
+    // Request LiDAR processing via WebSocket
+    // This is handled by App.tsx which sends the request_lidar message
+    const event = new CustomEvent('request-lidar', {
+      detail: {
+        parcelId: parcel.parcel_id,
+        lat: parcel.centroid_lat,
+        lon: parcel.centroid_lon,
+      },
+    });
+    window.dispatchEvent(event);
+  };
 
   return (
     <motion.div
@@ -134,12 +167,47 @@ export function ParcelRevealCard() {
 
             {/* MPZP badge */}
             {parcel.has_mpzp && (
-              <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400">
+              <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-blue-500/10 border border-blue-500/20 text-xs text-blue-400 mb-4">
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 {parcel.mpzp_symbol ? `MPZP: ${parcel.mpzp_symbol}` : 'Ma MPZP'}
               </div>
+            )}
+
+            {/* 3D View button */}
+            {hasCoordinates && (
+              <button
+                onClick={request3DView}
+                disabled={is3DLoading}
+                className={`
+                  w-full flex items-center justify-center gap-2 py-2.5 rounded-lg
+                  font-medium text-sm transition-all
+                  ${is3DLoading
+                    ? 'bg-emerald-500/20 text-emerald-400 cursor-wait'
+                    : has3DData
+                      ? 'bg-emerald-500/30 hover:bg-emerald-500/40 text-emerald-300 border border-emerald-500/30'
+                      : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20'
+                  }
+                `}
+              >
+                {is3DLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Ładuję...</span>
+                  </>
+                ) : has3DData ? (
+                  <>
+                    <Cube className="w-4 h-4" />
+                    <span>Otwórz widok 3D</span>
+                  </>
+                ) : (
+                  <>
+                    <Cube className="w-4 h-4" />
+                    <span>Pokaż teren 3D</span>
+                  </>
+                )}
+              </button>
             )}
           </motion.div>
         </AnimatePresence>

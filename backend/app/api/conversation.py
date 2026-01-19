@@ -2,13 +2,17 @@
 Conversation API endpoints.
 
 WebSocket for streaming agent events and REST for session management.
+Includes LiDAR progress event forwarding via Redis pub/sub.
 """
 
+import asyncio
 import json
+import os
 import uuid
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+import redis.asyncio as aioredis
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from loguru import logger
 
@@ -20,6 +24,9 @@ from app.models.schemas import (
     SessionInfo,
     ErrorResponse,
 )
+
+# Redis connection for LiDAR progress events
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
 router = APIRouter(prefix="/conversation", tags=["conversation"])
@@ -69,6 +76,41 @@ def cleanup_old_sessions(max_age_hours: int = 24):
         logger.info(f"Cleaned up session: {session_id}")
 
 
+async def lidar_progress_listener(session_id: str, websocket: WebSocket):
+    """
+    Listen for LiDAR progress events from Redis pub/sub and forward to WebSocket.
+
+    Runs as a background task while WebSocket is connected.
+    """
+    try:
+        redis_client = aioredis.from_url(REDIS_URL)
+        pubsub = redis_client.pubsub()
+        channel = f"lidar:progress:{session_id}"
+
+        await pubsub.subscribe(channel)
+        logger.info(f"Subscribed to LiDAR progress channel: {channel}")
+
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                try:
+                    data = json.loads(message["data"])
+                    await websocket.send_json(data)
+                except Exception as e:
+                    logger.error(f"Error forwarding LiDAR event: {e}")
+                    break
+
+    except asyncio.CancelledError:
+        logger.debug(f"LiDAR listener cancelled for session {session_id}")
+    except Exception as e:
+        logger.error(f"LiDAR listener error: {e}")
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await redis_client.close()
+        except:
+            pass
+
+
 # =============================================================================
 # WEBSOCKET ENDPOINT
 # =============================================================================
@@ -116,6 +158,11 @@ async def websocket_chat(websocket: WebSocket):
 
         logger.info(f"WebSocket connected: {session_id}")
 
+        # Start LiDAR progress listener as background task
+        lidar_listener_task = asyncio.create_task(
+            lidar_progress_listener(session_id, websocket)
+        )
+
         # Message loop
         while True:
             try:
@@ -149,6 +196,38 @@ async def websocket_chat(websocket: WebSocket):
                 elif data.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
 
+                elif data.get("type") == "request_lidar":
+                    # Start LiDAR processing for a parcel
+                    from app.tasks.lidar_tasks import process_lidar_for_parcel
+
+                    parcel_id = data.get("parcel_id")
+                    lat = data.get("lat")
+                    lon = data.get("lon")
+                    parcel_bbox = data.get("parcel_bbox")
+
+                    if not all([parcel_id, lat, lon]):
+                        await websocket.send_json({
+                            "type": "error",
+                            "data": {"message": "Missing parcel_id, lat, or lon"}
+                        })
+                        continue
+
+                    # Start Celery task
+                    task = process_lidar_for_parcel.delay(
+                        parcel_id=parcel_id,
+                        lat=lat,
+                        lon=lon,
+                        session_id=session_id,
+                        parcel_bbox=parcel_bbox,
+                    )
+
+                    await websocket.send_json({
+                        "type": "lidar_started",
+                        "job_id": task.id,
+                        "parcel_id": parcel_id,
+                    })
+                    logger.info(f"Started LiDAR job {task.id} for parcel {parcel_id}")
+
                 else:
                     await websocket.send_json({
                         "type": "error",
@@ -173,6 +252,15 @@ async def websocket_chat(websocket: WebSocket):
             })
         except:
             pass
+
+    finally:
+        # Cancel LiDAR listener task
+        if 'lidar_listener_task' in locals():
+            lidar_listener_task.cancel()
+            try:
+                await lidar_listener_task
+            except asyncio.CancelledError:
+                pass
 
 
 # =============================================================================
