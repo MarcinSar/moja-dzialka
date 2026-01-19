@@ -185,7 +185,7 @@ class ParcelAgent:
     Implements Human-in-the-Loop, Guard Patterns, and Critic Pattern.
     """
 
-    MODEL = "claude-sonnet-4-20250514"
+    MODEL = "claude-haiku-4-5-20250514"
     MAX_TOKENS = 4096
     MAX_TOOL_ITERATIONS = 8
 
