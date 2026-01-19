@@ -141,8 +141,8 @@ export function Potree3DViewer() {
 
     // TODO: Get actual parcel polygon from backend
     // For now, show center point
-    const lat = parcel.centroid_lat;
-    const lon = parcel.centroid_lon;
+    // const lat = parcel.centroid_lat;
+    // const lon = parcel.centroid_lon;
 
     // Convert WGS84 to local coordinates (simplified)
     // In production, use proj4 or server-side transformation

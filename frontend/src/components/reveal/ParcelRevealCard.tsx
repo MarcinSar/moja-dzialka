@@ -3,7 +3,7 @@ import { useParcelRevealStore } from '@/stores/parcelRevealStore';
 import { usePotreeStore, isLoading } from '@/stores/potreeStore';
 import { ParcelMiniMap } from './ParcelMiniMap';
 import { MapLayerSwitcher } from './MapLayerSwitcher';
-import { Cube, Loader2 } from 'lucide-react';
+import { Box, Loader2 } from 'lucide-react';
 
 export function ParcelRevealCard() {
   const {
@@ -20,7 +20,6 @@ export function ParcelRevealCard() {
   const {
     loadingStatus,
     potreeUrl,
-    startLoading,
     openViewer,
   } = usePotreeStore();
 
@@ -198,12 +197,12 @@ export function ParcelRevealCard() {
                   </>
                 ) : has3DData ? (
                   <>
-                    <Cube className="w-4 h-4" />
+                    <Box className="w-4 h-4" />
                     <span>Otwórz widok 3D</span>
                   </>
                 ) : (
                   <>
-                    <Cube className="w-4 h-4" />
+                    <Box className="w-4 h-4" />
                     <span>Pokaż teren 3D</span>
                   </>
                 )}

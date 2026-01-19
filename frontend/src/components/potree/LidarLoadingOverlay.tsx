@@ -1,6 +1,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { usePotreeStore, isLoading } from '@/stores/potreeStore';
-import { Loader2, Mountain, X } from 'lucide-react';
+import { Mountain, X } from 'lucide-react';
 
 /**
  * Loading overlay for LiDAR data processing.

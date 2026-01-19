@@ -79,11 +79,11 @@ export const usePotreeStore = create<PotreeState>((set, get) => ({
     errorMessage: null,
   }),
 
-  updateProgress: (progress, message, status) => set((state) => ({
+  updateProgress: (progress, message, status) => set({
     loadingProgress: progress,
     loadingMessage: message,
     loadingStatus: status || (progress < 70 ? 'downloading' : 'converting'),
-  })),
+  }),
 
   setReady: (potreeUrl, tileId) => set({
     loadingStatus: 'ready',

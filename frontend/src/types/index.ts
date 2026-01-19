@@ -117,7 +117,21 @@ export interface ConversationState {
 // WebSocket Events
 // ============================================
 
-export type WSEventType = 'message' | 'activity' | 'tool_call' | 'tool_result' | 'search_results' | 'error' | 'thinking' | 'done' | 'session';
+export type WSEventType =
+  | 'message'
+  | 'activity'
+  | 'tool_call'
+  | 'tool_result'
+  | 'search_results'
+  | 'error'
+  | 'thinking'
+  | 'done'
+  | 'session'
+  // LiDAR events
+  | 'lidar_started'
+  | 'lidar_progress'
+  | 'lidar_ready'
+  | 'lidar_error';
 
 export interface WSEvent {
   type: WSEventType;
