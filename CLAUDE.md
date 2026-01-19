@@ -66,6 +66,8 @@ Interaktywny agent AI (z awatarem/postacią) który:
 
 ### UKOŃCZONE: Agent z KG Course Patterns
 
+**Model:** Claude Haiku 4.5 (`claude-haiku-4-5-20250514`) - szybki i ekonomiczny
+
 | Pattern | Implementacja |
 |---------|---------------|
 | Human-in-the-Loop | `propose_*` → user confirms → `approve_*` |
@@ -85,6 +87,9 @@ Interaktywny agent AI (z awatarem/postacią) który:
 | `/api/v1/search/map` | POST | GeoJSON map data |
 | `/api/v1/search/gminy` | GET | List of gminy |
 | `/api/v1/search/mpzp-symbols` | GET | MPZP symbol definitions |
+| `/api/v1/lidar/request` | POST | Start LiDAR processing job |
+| `/api/v1/lidar/status/{job_id}` | GET | LiDAR job status |
+| `/api/v1/lidar/tile/{tile_id}/{path}` | GET | Serve Potree files |
 
 ### UKOŃCZONE: Frontend (Discovery Phase + Parcel Reveal)
 
@@ -96,6 +101,90 @@ Interaktywny agent AI (z awatarem/postacią) który:
 | **Parcel Reveal** | `components/reveal/ParcelRevealCard.tsx` | **Płynne pokazywanie działek** |
 | Mini Map | `components/reveal/ParcelMiniMap.tsx` | Mapa satelitarna z działką |
 | Map Layers | `components/reveal/MapLayerSwitcher.tsx` | Przełącznik warstw mapy |
+
+### NOWE (2026-01-19): Potree 3D LiDAR Visualization
+
+**Efekt "WOW":** Interaktywna wizualizacja 3D terenu działki z prawdziwych danych LiDAR (GUGiK).
+
+```
+User klika "Pokaż teren 3D" → Celery pobiera LAZ z GUGiK → PotreeConverter
+→ WebSocket progress events → BUM! 3D viewer z chmurą punktów
+```
+
+**Architektura:**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  FRONTEND                                                            │
+│  ParcelRevealCard → [Pokaż 3D] → LidarLoadingOverlay → Potree3DViewer│
+└────────────────────────────┬────────────────────────────────────────┘
+                             │ WebSocket (lidar_progress events)
+┌────────────────────────────▼────────────────────────────────────────┐
+│  BACKEND (FastAPI)                                                   │
+│  WebSocket request_lidar → Celery job → Redis pub/sub → WS events   │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────────┐
+│  CELERY WORKER (z PotreeConverter 2.0)                              │
+│  1. Sprawdź cache (Redis + filesystem)                              │
+│  2. Pobierz LAZ z GUGiK WCS (50-300MB per tile)                    │
+│  3. Konwertuj LAZ → Potree (PotreeConverter 2.0)                   │
+│  4. Wyślij event "lidar_ready" z URL                               │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────────┐
+│  STORAGE                                                             │
+│  /data/lidar/laz_cache/{tile_id}.laz     (TTL 7 dni)               │
+│  /data/lidar/potree/{tile_id}/           (metadata.json + octree)   │
+│  Redis: lidar:{session}:* (progress tracking)                       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Nowe komponenty Backend:**
+
+| Plik | Funkcja |
+|------|---------|
+| `backend/app/tasks/__init__.py` | Celery app config (Redis broker) |
+| `backend/app/tasks/lidar_tasks.py` | Task `process_lidar_for_parcel()` |
+| `backend/app/tasks/potree_converter.py` | Wrapper PotreeConverter CLI |
+| `backend/app/services/gugik_lidar.py` | GUGiK WCS client, LAZ download |
+| `backend/app/api/lidar.py` | REST endpoints `/api/v1/lidar/*` |
+| `backend/Dockerfile.celery` | Image z PotreeConverter 2.0 |
+
+**Nowe komponenty Frontend:**
+
+| Plik | Funkcja |
+|------|---------|
+| `frontend/src/stores/potreeStore.ts` | Stan ładowania i viewera |
+| `frontend/src/components/potree/LidarLoadingOverlay.tsx` | Animowany progress |
+| `frontend/src/components/potree/Potree3DViewer.tsx` | Three.js + Potree viewer |
+| `frontend/src/components/potree/ViewerControls.tsx` | Kontrolki viewera |
+
+**WebSocket Events:**
+
+| Event | Kierunek | Opis |
+|-------|----------|------|
+| `request_lidar` | Client → Server | Inicjuj przetwarzanie LiDAR |
+| `lidar_started` | Server → Client | Job rozpoczęty, zawiera job_id |
+| `lidar_progress` | Server → Client | Progress 0-100%, komunikat |
+| `lidar_ready` | Server → Client | Gotowe, zawiera potree_url |
+| `lidar_error` | Server → Client | Błąd z komunikatem |
+
+**API Endpoints LiDAR:**
+
+| Endpoint | Metoda | Opis |
+|----------|--------|------|
+| `/api/v1/lidar/request` | POST | Start job (parcel_id, lat, lon) |
+| `/api/v1/lidar/status/{job_id}` | GET | Status zadania |
+| `/api/v1/lidar/tile/{tile_id}/{path}` | GET | Serwuj pliki Potree |
+
+**Estymowane czasy ładowania:**
+
+| Scenariusz | Czas |
+|------------|------|
+| Tile w cache | ~2s |
+| Download LAZ (100MB) | 30-60s |
+| Konwersja Potree | 10-30s |
+| **Bez cache** | **45-90s** |
 
 ### NOWE (2026-01-19): Search Architecture Redesign
 
@@ -153,14 +242,14 @@ Interaktywny agent AI (z awatarem/postacią) który:
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         FRONTEND                                     │
-│   React + Leaflet + Chat UI + Avatar + ParcelReveal                 │
+│   React + Leaflet + Chat UI + Avatar + ParcelReveal + Potree3D      │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ WebSocket / REST
 ┌────────────────────────────▼────────────────────────────────────────┐
 │                      AGENT LAYER (FastAPI)                           │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
 │  │ ParcelAgent │  │ Tools       │  │ EventStream │                  │
-│  │ (Claude API)│  │ (13 tools)  │  │ (WebSocket) │                  │
+│  │(Haiku 4.5)  │  │ (15 tools)  │  │ (WebSocket) │                  │
 │  └─────────────┘  └─────────────┘  └─────────────┘                  │
 │                           │                                          │
 │  Patterns: Human-in-the-Loop | Guard | Critic | Few-Shot            │
@@ -187,6 +276,16 @@ Interaktywny agent AI (z awatarem/postacią) który:
 │  │              │  │ = PRIMARY!   │  │              │               │
 │  └──────────────┘  └──────────────┘  └──────────────┘               │
 └──────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                    LIDAR PROCESSING LAYER (Celery)                   │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │             celery-worker (PotreeConverter 2.0)              │    │
+│  │   request_lidar → Download LAZ (GUGiK) → Convert → Ready    │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                             │                                        │
+│  Redis (broker) ←──────────┼────────→ /data/lidar/ (storage)        │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -532,13 +631,15 @@ def _generate_highlights(parcel: dict, prefs: dict) -> list[str]:
 ```
 moja-dzialka/
 ├── backend/
+│   ├── Dockerfile.celery              # ✨ NOWY: Image z PotreeConverter 2.0
 │   └── app/
 │       ├── main.py                    # FastAPI entry + lifespan
 │       ├── config.py                  # Settings from env
 │       ├── api/
 │       │   ├── __init__.py
-│       │   ├── conversation.py        # WebSocket + REST chat
-│       │   └── search.py              # REST search endpoints
+│       │   ├── conversation.py        # WebSocket + REST chat + lidar events
+│       │   ├── search.py              # REST search endpoints
+│       │   └── lidar.py               # ✨ NOWY: LiDAR REST endpoints
 │       ├── models/
 │       │   ├── __init__.py
 │       │   └── schemas.py             # Pydantic models
@@ -548,15 +649,22 @@ moja-dzialka/
 │       │   ├── spatial_service.py     # PostGIS queries
 │       │   ├── vector_service.py      # Milvus queries
 │       │   ├── graph_service.py       # Neo4j queries
-│       │   └── parcel_search.py       # Hybrid search (RRF)
+│       │   ├── parcel_search.py       # Hybrid search (RRF)
+│       │   └── gugik_lidar.py         # ✨ NOWY: GUGiK WCS client
+│       ├── tasks/                     # ✨ NOWY: Celery tasks
+│       │   ├── __init__.py            # Celery app config
+│       │   ├── lidar_tasks.py         # process_lidar_for_parcel()
+│       │   └── potree_converter.py    # PotreeConverter wrapper
 │       └── agent/
 │           ├── __init__.py
 │           ├── tools.py               # 15 agent tools + state + highlights
-│           └── orchestrator.py        # ParcelAgent + streaming
+│           └── orchestrator.py        # ParcelAgent (Haiku 4.5) + streaming
 ├── frontend/
+│   ├── index.html                     # + Potree/Three.js CDN scripts
 │   └── src/
-│       ├── App.tsx                    # Root + WebSocket event handling
+│       ├── App.tsx                    # Root + WebSocket + lidar events
 │       ├── index.css                  # Tailwind + Leaflet styles
+│       ├── vite-env.d.ts              # ✨ NOWY: Vite env types
 │       ├── components/
 │       │   ├── phases/
 │       │   │   ├── DiscoveryPhase.tsx     # Główna faza (awatar + chat)
@@ -569,9 +677,14 @@ moja-dzialka/
 │       │   │   ├── AvatarFull.tsx         # Pełny awatar (Rive)
 │       │   │   └── AvatarCompact.tsx      # Kompaktowy awatar
 │       │   ├── reveal/                    # ✨ NOWE (2026-01-19)
-│       │   │   ├── ParcelRevealCard.tsx   # Pływająca karta z działką
+│       │   │   ├── ParcelRevealCard.tsx   # Pływająca karta + przycisk 3D
 │       │   │   ├── ParcelMiniMap.tsx      # Mini mapa Leaflet
 │       │   │   ├── MapLayerSwitcher.tsx   # Przełącznik warstw
+│       │   │   └── index.ts               # Barrel export
+│       │   ├── potree/                    # ✨ NOWE: Potree 3D LiDAR
+│       │   │   ├── Potree3DViewer.tsx     # Three.js + Potree viewer
+│       │   │   ├── LidarLoadingOverlay.tsx# Animowany progress bar
+│       │   │   ├── ViewerControls.tsx     # Kontrolki viewera
 │       │   │   └── index.ts               # Barrel export
 │       │   ├── MapPanel.tsx               # Panel mapy (Results)
 │       │   └── effects/
@@ -580,7 +693,8 @@ moja-dzialka/
 │       │   ├── chatStore.ts               # Stan czatu (Zustand)
 │       │   ├── searchStore.ts             # Stan wyszukiwania
 │       │   ├── uiPhaseStore.ts            # Stan fazy UI
-│       │   └── parcelRevealStore.ts       # ✨ NOWY: Stan reveal flow
+│       │   ├── parcelRevealStore.ts       # Stan reveal flow
+│       │   └── potreeStore.ts             # ✨ NOWY: Stan LiDAR/viewera
 │       ├── hooks/
 │       │   └── useChat.ts                 # Hook czatu + quick actions
 │       ├── services/
@@ -677,21 +791,32 @@ VECTOR_WEIGHT = 0.2    # Milvus (similarity to reference parcel)
 
 ## Uruchomienie
 
-### 1. Bazy danych
+### 1. Bazy danych + Celery worker
 
 ```bash
+# Podstawowe serwisy
 docker-compose up -d postgres neo4j milvus redis
+
+# Z Celery worker dla LiDAR (wymaga wcześniejszego buildu)
+docker-compose build celery-worker
+docker-compose up -d postgres neo4j milvus redis celery-worker
 ```
 
 **Konfiguracja połączeń (docker-compose.yml):**
 
-| Baza | Host:Port | User | Password | Database/Collection |
-|------|-----------|------|----------|---------------------|
-| PostGIS | localhost:5432 | app | secret | moja_dzialka |
-| Neo4j | localhost:7687 | neo4j | secretpassword | neo4j |
-| Neo4j Browser | localhost:7474 | - | - | - |
-| Milvus | localhost:19530 | - | - | parcels |
-| Redis | localhost:6379 | - | - | - |
+| Serwis | Host:Port | User | Password | Opis |
+|--------|-----------|------|----------|------|
+| PostGIS | localhost:5432 | app | secret | Baza danych parcels |
+| Neo4j | localhost:7687 | neo4j | secretpassword | Graf wiedzy |
+| Neo4j Browser | localhost:7474 | - | - | UI Neo4j |
+| Milvus | localhost:19530 | - | - | Wektory embeddingów |
+| Redis | localhost:6379 | - | - | Celery broker + cache |
+| celery-worker | - | - | - | ✨ NOWY: LiDAR processing |
+
+**Celery Worker (Dockerfile.celery):**
+- Python 3.11-slim + PotreeConverter 2.0
+- Queues: `lidar` (concurrency=2)
+- Volumes: `/data/lidar` (LAZ cache + Potree output)
 
 ### 2. Import dev sample
 
@@ -835,4 +960,4 @@ docker volume ls | grep moja-dzialka
 
 ---
 
-*Ostatnia aktualizacja: 2026-01-19 (FULL dataset 1.3M działek zaimportowany)*
+*Ostatnia aktualizacja: 2026-01-19 (Potree 3D LiDAR integration + Model change to Haiku 4.5)*
