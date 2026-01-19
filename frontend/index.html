@@ -17,17 +17,10 @@
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
           crossorigin="" />
 
-    <!-- Potree CSS -->
-    <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/potree-core@1.1.4/resources/potree.css">
+    <!-- Potree/Three.js loaded dynamically when needed -->
   </head>
   <body>
     <div id="root"></div>
-
-    <!-- Three.js (compatible with Potree) -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
-
-    <!-- Potree viewer library -->
-    <script src="https://cdn.jsdelivr.net/npm/potree-core@1.1.4/build/potree.js"></script>
 
     <script type="module" src="/src/main.tsx"></script>
   </body>
