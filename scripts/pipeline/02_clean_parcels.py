@@ -159,23 +159,32 @@ def calculate_land_cover_ratios(
     return parcels
 
 
-def assign_administrative_location(parcels: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def assign_administrative_location(
+    parcels: gpd.GeoDataFrame,
+    batch_size: int = 50000
+) -> gpd.GeoDataFrame:
     """
     Assign administrative location from BDOT10k ADJA/ADMS layers.
 
+    Correctly filters ADJA_A by RODZAJ to separate gminy from powiaty.
+
     Adds columns:
     - wojewodztwo (always "pomorskie")
-    - powiat
-    - gmina
-    - miejscowosc
-    - rodzaj_miejscowosci
+    - gmina (nazwa gminy)
+    - gmina_teryt (7-cyfrowy kod TERYT gminy)
+    - powiat (nazwa powiatu)
+    - powiat_teryt (4-cyfrowy kod TERYT powiatu)
+    - miejscowosc (nazwa miejscowości)
+    - rodzaj_miejscowosci (typ: wieś, miasto, osada, etc.)
     """
     logger.info("Assigning administrative location...")
 
     # Initialize columns
     parcels["wojewodztwo"] = "pomorskie"
-    parcels["powiat"] = None
     parcels["gmina"] = None
+    parcels["gmina_teryt"] = None
+    parcels["powiat"] = None
+    parcels["powiat_teryt"] = None
     parcels["miejscowosc"] = None
     parcels["rodzaj_miejscowosci"] = None
 
@@ -183,89 +192,190 @@ def assign_administrative_location(parcels: gpd.GeoDataFrame) -> gpd.GeoDataFram
     adja = load_bdot10k_layer("ADJA_A")
     adms = load_bdot10k_layer("ADMS_A")
 
+    # ==========================================================================
+    # Step 1: Process gminy from ADJA_A
+    # ==========================================================================
     if adja is not None and not adja.empty:
         logger.info(f"  ADJA_A loaded: {len(adja):,} records")
+        logger.info(f"  ADJA columns: {list(adja.columns)}")
 
         # Ensure same CRS
         if adja.crs != parcels.crs:
             adja = adja.to_crs(parcels.crs)
 
-        # Log column names for debugging
-        logger.info(f"  ADJA columns: {list(adja.columns)}")
+        # Check for RODZAJ column (may be uppercase or mixed case)
+        rodzaj_col = next((c for c in adja.columns if c.upper() == "RODZAJ"), None)
+        nazwa_col = next((c for c in adja.columns if c.upper() == "NAZWA"), None)
+        teryt_col = next((c for c in adja.columns if c.upper() == "TERYT"), None)
+        nadrzedna_col = next((c for c in adja.columns if "NADRZEDNEJ" in c.upper()), None)
 
-        # Find column names (may vary)
-        nazwa_col = next((c for c in adja.columns if "nazwa" in c.lower()), None)
-        rodzaj_col = next((c for c in adja.columns if "rodzaj" in c.lower()), None)
+        if rodzaj_col and nazwa_col and teryt_col:
+            # Log available RODZAJ values
+            rodzaj_values = adja[rodzaj_col].unique()
+            logger.info(f"  RODZAJ values in ADJA: {sorted(rodzaj_values)}")
 
-        if nazwa_col:
-            # Separate powiaty and gminy based on geometry size or other attributes
-            # In BDOT10k, ADJA typically contains both powiaty and gminy
-            # We'll use spatial join with centroids
+            # Filter gminy (RODZAJ = 'gmina')
+            gminy = adja[adja[rodzaj_col] == "gmina"].copy()
+            logger.info(f"  Gminy filtered: {len(gminy):,} records")
 
-            parcels_centroids = parcels.copy()
-            parcels_centroids["geometry"] = parcels_centroids.geometry.centroid
+            if len(gminy) > 0:
+                # Prepare gminy GeoDataFrame
+                gminy_cols = ["geometry"]
+                gminy_rename = {}
 
-            # Spatial join
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                joined = gpd.sjoin(
-                    parcels_centroids[["geometry"]],
-                    adja[[nazwa_col, "geometry"]].rename(columns={nazwa_col: "admin_nazwa"}),
-                    how="left",
-                    predicate="within"
-                )
+                gminy_cols.append(nazwa_col)
+                gminy_rename[nazwa_col] = "gmina_nazwa"
 
-            # Handle duplicates
-            joined = joined[~joined.index.duplicated(keep="first")]
+                gminy_cols.append(teryt_col)
+                gminy_rename[teryt_col] = "gmina_teryt_src"
 
-            # Assign gmina from the join
-            parcels.loc[joined.index, "gmina"] = joined["admin_nazwa"]
+                if nadrzedna_col:
+                    gminy_cols.append(nadrzedna_col)
+                    gminy_rename[nadrzedna_col] = "powiat_teryt_src"
 
-            assigned_count = parcels["gmina"].notna().sum()
-            logger.info(f"  Assigned gmina to {assigned_count:,} parcels")
+                gminy_gdf = gminy[gminy_cols].rename(columns=gminy_rename)
 
+                # Process in batches
+                n_batches = (len(parcels) + batch_size - 1) // batch_size
+                logger.info(f"  Processing gminy in {n_batches} batches...")
+                progress = ProgressLogger(n_batches, "  gminy join", log_every=5, logger_instance=logger)
+
+                for i in range(0, len(parcels), batch_size):
+                    batch_end = min(i + batch_size, len(parcels))
+                    batch_idx = parcels.index[i:batch_end]
+
+                    # Create centroids for batch
+                    batch_centroids = parcels.loc[batch_idx].copy()
+                    batch_centroids["geometry"] = batch_centroids.geometry.centroid
+
+                    # Spatial join
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        joined = gpd.sjoin(
+                            batch_centroids[["geometry"]],
+                            gminy_gdf,
+                            how="left",
+                            predicate="within"
+                        )
+
+                    # Handle duplicates (parcel on boundary)
+                    joined = joined[~joined.index.duplicated(keep="first")]
+
+                    # Assign values
+                    parcels.loc[joined.index, "gmina"] = joined["gmina_nazwa"].values
+                    parcels.loc[joined.index, "gmina_teryt"] = joined["gmina_teryt_src"].values
+
+                    if "powiat_teryt_src" in joined.columns:
+                        parcels.loc[joined.index, "powiat_teryt"] = joined["powiat_teryt_src"].values
+
+                    progress.update()
+
+                gmina_count = parcels["gmina"].notna().sum()
+                logger.info(f"  Assigned gmina to {gmina_count:,} parcels ({100*gmina_count/len(parcels):.1f}%)")
+                logger.info(f"  Unique gminy: {parcels['gmina'].nunique()}")
+
+            # ==========================================================================
+            # Step 2: Map powiat names from powiat_teryt
+            # ==========================================================================
+            # Filter powiaty (RODZAJ = 'powiat')
+            powiaty = adja[adja[rodzaj_col] == "powiat"].copy()
+            logger.info(f"  Powiaty filtered: {len(powiaty):,} records")
+
+            if len(powiaty) > 0:
+                # Create powiat_teryt -> powiat_nazwa mapping
+                powiat_map = dict(zip(powiaty[teryt_col], powiaty[nazwa_col]))
+                logger.info(f"  Powiat mapping: {powiat_map}")
+
+                # Apply mapping
+                parcels["powiat"] = parcels["powiat_teryt"].map(powiat_map)
+
+                powiat_count = parcels["powiat"].notna().sum()
+                logger.info(f"  Assigned powiat to {powiat_count:,} parcels ({100*powiat_count/len(parcels):.1f}%)")
+                logger.info(f"  Unique powiaty: {parcels['powiat'].nunique()}")
+
+        else:
+            logger.warning(f"  Missing required columns. Found: rodzaj={rodzaj_col}, nazwa={nazwa_col}, teryt={teryt_col}")
+
+    # ==========================================================================
+    # Step 3: Process miejscowości from ADMS_A
+    # ==========================================================================
     if adms is not None and not adms.empty:
         logger.info(f"  ADMS_A loaded: {len(adms):,} records")
+        logger.info(f"  ADMS columns: {list(adms.columns)}")
 
         # Ensure same CRS
         if adms.crs != parcels.crs:
             adms = adms.to_crs(parcels.crs)
 
-        logger.info(f"  ADMS columns: {list(adms.columns)}")
-
         # Find relevant columns
-        nazwa_col = next((c for c in adms.columns if "nazwa" in c.lower()), None)
-        rodzaj_col = next((c for c in adms.columns if "rodzaj" in c.lower()), None)
+        nazwa_col = next((c for c in adms.columns if c.upper() == "NAZWA"), None)
+        rodzaj_col = next((c for c in adms.columns if c.upper() == "RODZAJ"), None)
 
         if nazwa_col:
-            parcels_centroids = parcels.copy()
-            parcels_centroids["geometry"] = parcels_centroids.geometry.centroid
-
-            # Spatial join for miejscowosc
-            cols_to_join = [nazwa_col, "geometry"]
-            rename_map = {nazwa_col: "miejscowosc_nazwa"}
+            # Prepare miejscowosci GeoDataFrame
+            adms_cols = [nazwa_col, "geometry"]
+            adms_rename = {nazwa_col: "miejscowosc_nazwa"}
 
             if rodzaj_col:
-                cols_to_join.insert(1, rodzaj_col)
-                rename_map[rodzaj_col] = "miejscowosc_rodzaj"
+                adms_cols.insert(1, rodzaj_col)
+                adms_rename[rodzaj_col] = "miejscowosc_rodzaj"
 
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                joined = gpd.sjoin(
-                    parcels_centroids[["geometry"]],
-                    adms[cols_to_join].rename(columns=rename_map),
-                    how="left",
-                    predicate="within"
-                )
+            adms_gdf = adms[adms_cols].rename(columns=adms_rename)
 
-            joined = joined[~joined.index.duplicated(keep="first")]
+            # Process in batches
+            n_batches = (len(parcels) + batch_size - 1) // batch_size
+            logger.info(f"  Processing miejscowości in {n_batches} batches...")
+            progress = ProgressLogger(n_batches, "  miejscowości join", log_every=5, logger_instance=logger)
 
-            parcels.loc[joined.index, "miejscowosc"] = joined["miejscowosc_nazwa"]
-            if "miejscowosc_rodzaj" in joined.columns:
-                parcels.loc[joined.index, "rodzaj_miejscowosci"] = joined["miejscowosc_rodzaj"]
+            for i in range(0, len(parcels), batch_size):
+                batch_end = min(i + batch_size, len(parcels))
+                batch_idx = parcels.index[i:batch_end]
 
-            assigned_count = parcels["miejscowosc"].notna().sum()
-            logger.info(f"  Assigned miejscowosc to {assigned_count:,} parcels")
+                # Create centroids for batch
+                batch_centroids = parcels.loc[batch_idx].copy()
+                batch_centroids["geometry"] = batch_centroids.geometry.centroid
+
+                # Spatial join
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    joined = gpd.sjoin(
+                        batch_centroids[["geometry"]],
+                        adms_gdf,
+                        how="left",
+                        predicate="within"
+                    )
+
+                # Handle duplicates
+                joined = joined[~joined.index.duplicated(keep="first")]
+
+                # Assign values
+                parcels.loc[joined.index, "miejscowosc"] = joined["miejscowosc_nazwa"].values
+
+                if "miejscowosc_rodzaj" in joined.columns:
+                    parcels.loc[joined.index, "rodzaj_miejscowosci"] = joined["miejscowosc_rodzaj"].values
+
+                progress.update()
+
+            miejscowosc_count = parcels["miejscowosc"].notna().sum()
+            logger.info(f"  Assigned miejscowosc to {miejscowosc_count:,} parcels ({100*miejscowosc_count/len(parcels):.1f}%)")
+            logger.info(f"  Unique miejscowości: {parcels['miejscowosc'].nunique()}")
+
+        else:
+            logger.warning(f"  ADMS_A: missing NAZWA column")
+
+    # ==========================================================================
+    # Final summary
+    # ==========================================================================
+    logger.info("\n  Administrative data summary:")
+    logger.info(f"    gmina: {parcels['gmina'].notna().sum():,} assigned, {parcels['gmina'].nunique()} unique")
+    logger.info(f"    gmina_teryt: {parcels['gmina_teryt'].notna().sum():,} assigned")
+    logger.info(f"    powiat: {parcels['powiat'].notna().sum():,} assigned, {parcels['powiat'].nunique()} unique")
+    logger.info(f"    powiat_teryt: {parcels['powiat_teryt'].notna().sum():,} assigned")
+    logger.info(f"    miejscowosc: {parcels['miejscowosc'].notna().sum():,} assigned, {parcels['miejscowosc'].nunique()} unique")
+
+    # Sample of gmina values
+    gmina_sample = parcels["gmina"].dropna().head(10).tolist()
+    logger.info(f"    Sample gmina values: {gmina_sample}")
 
     return parcels
 

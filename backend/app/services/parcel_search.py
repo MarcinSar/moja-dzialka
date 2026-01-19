@@ -1,12 +1,12 @@
 """
 Hybrid parcel search service.
 
-Combines results from:
-- PostGIS (spatial queries)
-- Milvus (vector similarity)
-- Neo4j (graph relationships)
+Architecture:
+- Neo4j (graph) = PRIMARY source for filtering and finding parcels
+- PostGIS = Spatial queries for geometry-based searches + GeoJSON generation
+- Milvus = Vector similarity for "find similar to X" and preference-based re-ranking
 
-Uses Reciprocal Rank Fusion (RRF) to combine rankings.
+Uses Reciprocal Rank Fusion (RRF) to combine rankings when multiple sources used.
 """
 
 from typing import List, Optional, Dict, Any
@@ -18,39 +18,103 @@ from loguru import logger
 
 from app.services.spatial_service import spatial_service, SpatialSearchParams
 from app.services.vector_service import vector_service, VectorSearchResult
-from app.services.graph_service import graph_service
+from app.services.graph_service import graph_service, ParcelSearchCriteria
 
 
 @dataclass
 class SearchPreferences:
-    """User preferences for parcel search."""
-    # Location
+    """
+    User preferences for parcel search.
+
+    Maps to graph_service.ParcelSearchCriteria for PRIMARY search.
+    Includes additional fields for spatial/vector searches when needed.
+    """
+    # === LOCATION ===
+    gmina: Optional[str] = None
+    miejscowosc: Optional[str] = None
+    powiat: Optional[str] = None
+    # Spatial search (optional - for radius-based search around a point)
     lat: Optional[float] = None
     lon: Optional[float] = None
     radius_m: float = 5000
-    gmina: Optional[str] = None
 
-    # Area
+    # === AREA ===
     min_area: Optional[float] = None
     max_area: Optional[float] = None
+    area_category: Optional[List[str]] = None  # ["srednia", "duza"]
 
-    # MPZP
+    # === CHARACTER & ENVIRONMENT ===
+    charakter_terenu: Optional[List[str]] = None  # ["wiejski", "podmiejski", "leśny"]
+    quietness_categories: Optional[List[str]] = None  # ["bardzo_cicha", "cicha"]
+    nature_categories: Optional[List[str]] = None  # ["bardzo_zielona", "zielona"]
+    building_density: Optional[List[str]] = None  # ["rzadka", "bardzo_rzadka"]
+
+    # === ACCESSIBILITY ===
+    accessibility_categories: Optional[List[str]] = None  # ["doskonały", "dobry"]
+    max_dist_to_school_m: Optional[int] = None
+    max_dist_to_shop_m: Optional[int] = None
+    max_dist_to_bus_stop_m: Optional[int] = None
+    has_road_access: Optional[bool] = None
+
+    # === NATURE PROXIMITY ===
+    max_dist_to_forest_m: Optional[int] = None
+    max_dist_to_water_m: Optional[int] = None
+    min_forest_pct_500m: Optional[float] = None  # e.g., 0.2 = 20% forest in 500m buffer
+
+    # === MPZP (ZONING) ===
     has_mpzp: Optional[bool] = None
     mpzp_budowlane: Optional[bool] = None
-    mpzp_symbol: Optional[str] = None
+    mpzp_symbols: Optional[List[str]] = None  # ["MN", "MN/U"]
 
-    # Preference weights (0-1)
+    # === INDUSTRIAL DISTANCE ===
+    min_dist_to_industrial_m: Optional[int] = None  # want to be FAR from industry
+
+    # === SORTING ===
+    sort_by: str = "quietness_score"  # or "nature_score", "accessibility_score", "area_m2"
+    sort_desc: bool = True
+
+    # === SIMILARITY SEARCH ===
+    reference_parcel_id: Optional[str] = None  # For "find similar to X" queries
+
+    # === LEGACY WEIGHTS (for backwards compatibility) ===
     quietness_weight: float = 0.5
     nature_weight: float = 0.3
     accessibility_weight: float = 0.2
 
-    # Reference parcel for similarity
-    reference_parcel_id: Optional[str] = None
+    def to_graph_criteria(self, limit: int = 50) -> ParcelSearchCriteria:
+        """Convert to ParcelSearchCriteria for graph search."""
+        return ParcelSearchCriteria(
+            gmina=self.gmina,
+            miejscowosc=self.miejscowosc,
+            powiat=self.powiat,
+            min_area_m2=self.min_area,
+            max_area_m2=self.max_area,
+            area_category=self.area_category,
+            charakter_terenu=self.charakter_terenu,
+            quietness_categories=self.quietness_categories,
+            nature_categories=self.nature_categories,
+            building_density=self.building_density,
+            accessibility_categories=self.accessibility_categories,
+            max_dist_to_school_m=self.max_dist_to_school_m,
+            max_dist_to_shop_m=self.max_dist_to_shop_m,
+            max_dist_to_bus_stop_m=self.max_dist_to_bus_stop_m,
+            has_road_access=self.has_road_access,
+            max_dist_to_forest_m=self.max_dist_to_forest_m,
+            max_dist_to_water_m=self.max_dist_to_water_m,
+            min_forest_pct_500m=self.min_forest_pct_500m,
+            has_mpzp=self.has_mpzp,
+            mpzp_buildable=self.mpzp_budowlane,
+            mpzp_symbols=self.mpzp_symbols,
+            min_dist_to_industrial_m=self.min_dist_to_industrial_m,
+            sort_by=self.sort_by,
+            sort_desc=self.sort_desc,
+            limit=limit,
+        )
 
 
 @dataclass
 class SearchResult:
-    """Combined search result."""
+    """Combined search result with all available data."""
     parcel_id: str
     rrf_score: float  # Combined ranking score
     sources: List[str] = field(default_factory=list)  # Which sources returned this
@@ -60,7 +124,7 @@ class SearchResult:
     miejscowosc: Optional[str] = None
     area_m2: Optional[float] = None
 
-    # Scores
+    # Composite scores (0-100)
     quietness_score: Optional[float] = None
     nature_score: Optional[float] = None
     accessibility_score: Optional[float] = None
@@ -73,7 +137,23 @@ class SearchResult:
     # Location
     centroid_lat: Optional[float] = None
     centroid_lon: Optional[float] = None
-    distance_m: Optional[float] = None
+    distance_m: Optional[float] = None  # For spatial search (distance from point)
+
+    # Distance to nature (meters)
+    dist_to_forest: Optional[float] = None
+    dist_to_water: Optional[float] = None
+
+    # Distance to amenities (meters)
+    dist_to_school: Optional[float] = None
+    dist_to_shop: Optional[float] = None
+    dist_to_bus_stop: Optional[float] = None
+
+    # Buffer analysis (500m radius)
+    pct_forest_500m: Optional[float] = None
+    count_buildings_500m: Optional[int] = None
+
+    # Access
+    has_road_access: Optional[bool] = None
 
     # Vector similarity (if applicable)
     similarity_score: Optional[float] = None
@@ -81,18 +161,23 @@ class SearchResult:
 
 class HybridSearchService:
     """
-    Hybrid search combining spatial, vector, and graph queries.
+    Hybrid search combining graph, spatial, and vector queries.
 
-    Uses Reciprocal Rank Fusion (RRF) to combine results from different sources.
+    Architecture:
+    - Graph (Neo4j) = PRIMARY - always runs, uses rich relationships
+    - Spatial (PostGIS) = For geometry-based searches (radius from point)
+    - Vector (Milvus) = For "find similar" and preference-based re-ranking
+
+    Uses Reciprocal Rank Fusion (RRF) to combine results when multiple sources used.
     """
 
     # RRF constant (typically 60)
     RRF_K = 60
 
-    # Default weights for each source
-    SPATIAL_WEIGHT = 0.4
-    VECTOR_WEIGHT = 0.3
-    GRAPH_WEIGHT = 0.3
+    # Weights for each source (Graph is PRIMARY)
+    GRAPH_WEIGHT = 0.5   # PRIMARY source
+    SPATIAL_WEIGHT = 0.3  # Geometry-based when location provided
+    VECTOR_WEIGHT = 0.2   # Re-ranking/similarity
 
     async def search(
         self,
@@ -102,6 +187,9 @@ class HybridSearchService:
     ) -> List[SearchResult]:
         """
         Perform hybrid search based on user preferences.
+
+        Graph search is ALWAYS executed as the primary source.
+        Spatial/vector are used to augment when relevant.
 
         Args:
             preferences: Search preferences
@@ -113,6 +201,8 @@ class HybridSearchService:
         """
         logger.info(f"Hybrid search: gmina={preferences.gmina}, "
                    f"area={preferences.min_area}-{preferences.max_area}, "
+                   f"quietness={preferences.quietness_categories}, "
+                   f"nature={preferences.nature_categories}, "
                    f"reference={preferences.reference_parcel_id}")
 
         # Collect results from each source in parallel
@@ -122,52 +212,83 @@ class HybridSearchService:
         async def empty_result():
             return []
 
-        # 1. Spatial search (if location provided)
+        # 1. GRAPH SEARCH - PRIMARY (ALWAYS RUNS)
+        tasks.append(self._graph_search(preferences, limit * 3))
+
+        # 2. Spatial search (only if location coordinates provided)
         if preferences.lat and preferences.lon:
             tasks.append(self._spatial_search(preferences, limit * 2))
         else:
             tasks.append(empty_result())
 
-        # 2. Vector similarity search (if reference parcel or preferences)
+        # 3. Vector similarity search (for "find similar" or preference re-ranking)
         if preferences.reference_parcel_id:
             tasks.append(self._vector_search_similar(preferences, limit * 2))
-        elif preferences.quietness_weight or preferences.nature_weight:
-            tasks.append(self._vector_search_preferences(preferences, limit * 2))
         else:
-            tasks.append(empty_result())
-
-        # 3. Graph search (for MPZP filtering)
-        if preferences.mpzp_symbol or preferences.mpzp_budowlane:
-            tasks.append(self._graph_search(preferences, limit * 2))
-        else:
+            # Skip vector search if no reference - graph handles preferences better
             tasks.append(empty_result())
 
         # Execute all searches
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        spatial_results = results[0] if not isinstance(results[0], Exception) else []
-        vector_results = results[1] if not isinstance(results[1], Exception) else []
-        graph_results = results[2] if not isinstance(results[2], Exception) else []
+        graph_results = results[0] if not isinstance(results[0], Exception) else []
+        spatial_results = results[1] if not isinstance(results[1], Exception) else []
+        vector_results = results[2] if not isinstance(results[2], Exception) else []
 
         # Log any errors
         for i, r in enumerate(results):
             if isinstance(r, Exception):
-                logger.error(f"Search task {i} failed: {r}")
+                source_name = ["graph", "spatial", "vector"][i]
+                logger.error(f"Search task {source_name} failed: {r}")
 
-        # Combine using RRF
-        combined = self._combine_with_rrf(
-            spatial_results, vector_results, graph_results
-        )
+        # If only graph results, return them directly without RRF
+        if not spatial_results and not vector_results:
+            combined = self._convert_graph_to_results(graph_results)
+        else:
+            # Combine using RRF when multiple sources
+            combined = self._combine_with_rrf(
+                spatial_results, vector_results, graph_results
+            )
 
         # Take top results
         combined = combined[:limit]
 
-        # Optionally fetch full details
+        # Optionally fetch full details (geometry) from PostGIS
         if include_details and combined:
             combined = await self._enrich_results(combined)
 
-        logger.info(f"Hybrid search returned {len(combined)} results")
+        logger.info(f"Hybrid search returned {len(combined)} results "
+                   f"(graph={len(graph_results)}, spatial={len(spatial_results)}, vector={len(vector_results)})")
         return combined
+
+    def _convert_graph_to_results(self, graph_results: List[Dict]) -> List[SearchResult]:
+        """Convert graph results directly to SearchResult when no RRF needed."""
+        results = []
+        for i, r in enumerate(graph_results):
+            result = SearchResult(
+                parcel_id=r.get("id", ""),
+                rrf_score=1.0 / (i + 1),  # Simple rank-based score
+                sources=["graph"],
+                gmina=r.get("gmina"),
+                miejscowosc=r.get("miejscowosc"),
+                area_m2=r.get("area_m2"),
+                quietness_score=r.get("quietness_score"),
+                nature_score=r.get("nature_score"),
+                accessibility_score=r.get("accessibility_score"),
+                has_mpzp=r.get("has_mpzp"),
+                mpzp_symbol=r.get("mpzp_symbol"),
+                centroid_lat=r.get("lat"),
+                centroid_lon=r.get("lon"),
+                # Additional fields from graph
+                dist_to_forest=r.get("dist_to_forest"),
+                dist_to_water=r.get("dist_to_water"),
+                dist_to_school=r.get("dist_to_school"),
+                dist_to_shop=r.get("dist_to_shop"),
+                pct_forest_500m=r.get("pct_forest_500m"),
+                has_road_access=r.get("has_road_access"),
+            )
+            results.append(result)
+        return results
 
     async def _spatial_search(
         self,
@@ -267,34 +388,39 @@ class HybridSearchService:
         preferences: SearchPreferences,
         limit: int
     ) -> List[Dict[str, Any]]:
-        """Execute graph-based search."""
-        if preferences.mpzp_symbol:
-            results = await graph_service.find_parcels_by_mpzp(
-                symbol=preferences.mpzp_symbol,
-                gmina=preferences.gmina,
-                limit=limit,
-            )
-        elif preferences.mpzp_budowlane:
-            results = await graph_service.find_buildable_parcels(
-                gmina=preferences.gmina,
-                min_area=preferences.min_area,
-                max_area=preferences.max_area,
-                limit=limit,
-            )
-        else:
-            return []
+        """
+        Execute graph-based search using comprehensive criteria.
 
-        # Convert to standard format
+        This is the PRIMARY search - always runs with all available filters.
+        """
+        # Convert preferences to graph criteria
+        criteria = preferences.to_graph_criteria(limit=limit)
+
+        # Execute comprehensive graph search
+        results = await graph_service.search_parcels(criteria)
+
+        # Convert to standard format with rank
         return [
             {
                 "id_dzialki": r.get("id"),
                 "gmina": r.get("gmina"),
+                "miejscowosc": r.get("miejscowosc"),
                 "area_m2": r.get("area_m2"),
-                "quietness_score": r.get("quietness"),
-                "nature_score": r.get("nature"),
+                "quietness_score": r.get("quietness_score"),
+                "nature_score": r.get("nature_score"),
+                "accessibility_score": r.get("accessibility_score"),
+                "has_mpzp": r.get("has_mpzp"),
                 "mpzp_symbol": r.get("mpzp_symbol"),
                 "centroid_lat": r.get("lat"),
                 "centroid_lon": r.get("lon"),
+                "dist_to_forest": r.get("dist_to_forest"),
+                "dist_to_water": r.get("dist_to_water"),
+                "dist_to_school": r.get("dist_to_school"),
+                "dist_to_shop": r.get("dist_to_shop"),
+                "dist_to_bus_stop": r.get("dist_to_bus_stop"),
+                "pct_forest_500m": r.get("pct_forest_500m"),
+                "count_buildings_500m": r.get("count_buildings_500m"),
+                "has_road_access": r.get("has_road_access"),
                 "_source": "graph",
                 "_rank": i + 1,
             }
@@ -310,45 +436,48 @@ class HybridSearchService:
         """
         Combine results using Reciprocal Rank Fusion.
 
-        RRF score = sum(1 / (k + rank)) across all sources
+        RRF score = sum(weight / (k + rank)) across all sources
+        Graph is PRIMARY so it contributes most to the score.
         """
         # Collect all parcel IDs with their ranks
         parcel_scores = defaultdict(lambda: {"score": 0.0, "sources": [], "data": {}})
 
-        # Process spatial results
-        for r in spatial_results:
-            pid = r.get("id_dzialki")
-            if pid:
-                rank = r.get("_rank", len(spatial_results))
-                parcel_scores[pid]["score"] += self.SPATIAL_WEIGHT / (self.RRF_K + rank)
-                parcel_scores[pid]["sources"].append("spatial")
-                parcel_scores[pid]["data"].update(r)
-
-        # Process vector results
-        for r in vector_results:
-            pid = r.get("id_dzialki")
-            if pid:
-                rank = r.get("_rank", len(vector_results))
-                parcel_scores[pid]["score"] += self.VECTOR_WEIGHT / (self.RRF_K + rank)
-                parcel_scores[pid]["sources"].append("vector")
-                # Add vector data - don't overwrite existing values from spatial
-                existing_data = parcel_scores[pid]["data"]
-                for key in ["gmina", "area_m2", "quietness_score", "nature_score", "accessibility_score"]:
-                    if key in r and r[key] is not None and existing_data.get(key) is None:
-                        existing_data[key] = r[key]
-                if "similarity_score" in r:
-                    existing_data["similarity_score"] = r["similarity_score"]
-
-        # Process graph results
+        # Process GRAPH results FIRST (PRIMARY source - provides most data)
         for r in graph_results:
             pid = r.get("id_dzialki")
             if pid:
                 rank = r.get("_rank", len(graph_results))
                 parcel_scores[pid]["score"] += self.GRAPH_WEIGHT / (self.RRF_K + rank)
                 parcel_scores[pid]["sources"].append("graph")
-                # Add graph-specific data
-                if "mpzp_symbol" in r and r["mpzp_symbol"]:
-                    parcel_scores[pid]["data"]["mpzp_symbol"] = r["mpzp_symbol"]
+                # Graph provides comprehensive data - use it as base
+                parcel_scores[pid]["data"].update(r)
+
+        # Process spatial results (supplements with location-based data)
+        for r in spatial_results:
+            pid = r.get("id_dzialki")
+            if pid:
+                rank = r.get("_rank", len(spatial_results))
+                parcel_scores[pid]["score"] += self.SPATIAL_WEIGHT / (self.RRF_K + rank)
+                parcel_scores[pid]["sources"].append("spatial")
+                # Only add spatial-specific data that graph doesn't have
+                existing_data = parcel_scores[pid]["data"]
+                if "distance_m" in r and r["distance_m"] is not None:
+                    existing_data["distance_m"] = r["distance_m"]
+                # Fill in any missing basic fields
+                for key in ["gmina", "miejscowosc", "area_m2", "centroid_lat", "centroid_lon"]:
+                    if key in r and r[key] is not None and existing_data.get(key) is None:
+                        existing_data[key] = r[key]
+
+        # Process vector results (for similarity scores)
+        for r in vector_results:
+            pid = r.get("id_dzialki")
+            if pid:
+                rank = r.get("_rank", len(vector_results))
+                parcel_scores[pid]["score"] += self.VECTOR_WEIGHT / (self.RRF_K + rank)
+                parcel_scores[pid]["sources"].append("vector")
+                # Add similarity score from vector search
+                if "similarity_score" in r and r["similarity_score"] is not None:
+                    parcel_scores[pid]["data"]["similarity_score"] = r["similarity_score"]
 
         # Convert to SearchResult objects
         results = []
@@ -370,6 +499,15 @@ class HybridSearchService:
                 centroid_lat=data.get("centroid_lat"),
                 centroid_lon=data.get("centroid_lon"),
                 distance_m=data.get("distance_m"),
+                # New fields from graph
+                dist_to_forest=data.get("dist_to_forest"),
+                dist_to_water=data.get("dist_to_water"),
+                dist_to_school=data.get("dist_to_school"),
+                dist_to_shop=data.get("dist_to_shop"),
+                dist_to_bus_stop=data.get("dist_to_bus_stop"),
+                pct_forest_500m=data.get("pct_forest_500m"),
+                count_buildings_500m=data.get("count_buildings_500m"),
+                has_road_access=data.get("has_road_access"),
                 similarity_score=data.get("similarity_score"),
             )
             results.append(result)
@@ -383,28 +521,55 @@ class HybridSearchService:
         self,
         results: List[SearchResult]
     ) -> List[SearchResult]:
-        """Enrich results with full details from PostGIS."""
+        """Enrich results with geometry details from PostGIS (for map display)."""
         parcel_ids = [r.parcel_id for r in results]
         details = await spatial_service.get_parcels_by_ids(parcel_ids)
 
         # Create lookup
         details_map = {d["id_dzialki"]: d for d in details}
 
-        # Update results
+        # Update results - fill in any missing fields from PostGIS
         for result in results:
             if result.parcel_id in details_map:
                 d = details_map[result.parcel_id]
-                result.gmina = d.get("gmina")
-                result.miejscowosc = d.get("miejscowosc")
-                result.area_m2 = d.get("area_m2")
-                result.quietness_score = d.get("quietness_score")
-                result.nature_score = d.get("nature_score")
-                result.accessibility_score = d.get("accessibility_score")
-                result.has_mpzp = d.get("has_mpzp")
-                result.mpzp_symbol = d.get("mpzp_symbol")
-                result.mpzp_budowlane = d.get("mpzp_czy_budowlane")
-                result.centroid_lat = d.get("centroid_lat")
-                result.centroid_lon = d.get("centroid_lon")
+                # Only fill in if not already set (graph data takes precedence)
+                if result.gmina is None:
+                    result.gmina = d.get("gmina")
+                if result.miejscowosc is None:
+                    result.miejscowosc = d.get("miejscowosc")
+                if result.area_m2 is None:
+                    result.area_m2 = d.get("area_m2")
+                if result.quietness_score is None:
+                    result.quietness_score = d.get("quietness_score")
+                if result.nature_score is None:
+                    result.nature_score = d.get("nature_score")
+                if result.accessibility_score is None:
+                    result.accessibility_score = d.get("accessibility_score")
+                if result.has_mpzp is None:
+                    result.has_mpzp = d.get("has_mpzp")
+                if result.mpzp_symbol is None:
+                    result.mpzp_symbol = d.get("mpzp_symbol")
+                if result.mpzp_budowlane is None:
+                    result.mpzp_budowlane = d.get("mpzp_czy_budowlane")
+                if result.centroid_lat is None:
+                    result.centroid_lat = d.get("centroid_lat")
+                if result.centroid_lon is None:
+                    result.centroid_lon = d.get("centroid_lon")
+                # Distance fields from PostGIS
+                if result.dist_to_forest is None:
+                    result.dist_to_forest = d.get("dist_to_forest")
+                if result.dist_to_water is None:
+                    result.dist_to_water = d.get("dist_to_water")
+                if result.dist_to_school is None:
+                    result.dist_to_school = d.get("dist_to_school")
+                if result.dist_to_shop is None:
+                    result.dist_to_shop = d.get("dist_to_shop")
+                if result.dist_to_bus_stop is None:
+                    result.dist_to_bus_stop = d.get("dist_to_bus_stop")
+                if result.pct_forest_500m is None:
+                    result.pct_forest_500m = d.get("pct_forest_500m")
+                if result.has_road_access is None:
+                    result.has_road_access = d.get("has_public_road_access")
 
         return results
 

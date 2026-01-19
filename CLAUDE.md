@@ -25,7 +25,7 @@ Interaktywny agent AI (z awatarem/postacią) który:
 
 ---
 
-## Status projektu (2026-01-18)
+## Status projektu (2026-01-19)
 
 ### UKOŃCZONE: Pipeline danych
 
@@ -80,12 +80,65 @@ Interaktywny agent AI (z awatarem/postacią) który:
 | `/api/v1/search/gminy` | GET | List of gminy |
 | `/api/v1/search/mpzp-symbols` | GET | MPZP symbol definitions |
 
-### PENDING: Frontend
+### UKOŃCZONE: Frontend (Discovery Phase + Parcel Reveal)
 
-- React + TypeScript + Tailwind
-- Split-screen layout (Chat | Map | Activity)
-- assistant-ui dla chat
-- Leaflet dla map
+| Komponent | Plik | Funkcja |
+|-----------|------|---------|
+| Discovery Phase | `components/phases/DiscoveryPhase.tsx` | Główna faza z awatarem i chatem |
+| Avatar | `components/avatar/AvatarFull.tsx` | Animowany awatar (Rive) |
+| Chat | `components/chat/DiscoveryChat.tsx` | Interfejs czatu |
+| **Parcel Reveal** | `components/reveal/ParcelRevealCard.tsx` | **Płynne pokazywanie działek** |
+| Mini Map | `components/reveal/ParcelMiniMap.tsx` | Mapa satelitarna z działką |
+| Map Layers | `components/reveal/MapLayerSwitcher.tsx` | Przełącznik warstw mapy |
+
+### NOWE (2026-01-19): Search Architecture Redesign
+
+**Problem:** Agent nie wykorzystywał pełnych możliwości bazy danych (36 cech, 15 typów węzłów).
+
+**Rozwiązanie:**
+1. **Graph as PRIMARY** - Neo4j search ZAWSZE się wykonuje (nawet bez explicit criteria)
+2. **Nowe wagi RRF:** Graph 50% + Spatial 30% + Vector 20%
+3. **25+ pól preferencji** - kategorie ciszy, natury, dostępności, gęstości zabudowy
+4. **Rich System Prompt** - agent zna wszystkie wymiary danych i mapowanie "user mówi" → "szukaj po"
+
+**Kluczowe zmiany:**
+- `parcel_search.py` - Graph ALWAYS runs, new SearchPreferences fields
+- `graph_service.py` - comprehensive `search_parcels()` with all criteria
+- `tools.py` - 25+ new input fields, improved highlights generation
+- `orchestrator.py` - Rich data context in SYSTEM_PROMPT
+
+### NOWE (2026-01-19): Parcel Reveal Flow
+
+**Problem:** Wcześniej wyniki wyszukiwania powodowały skok do 3-panelowego layoutu (brzydkie przejście).
+
+**Rozwiązanie:** Płynna karta z mapą w Discovery layout:
+- Wyniki pojawiają się jako pływająca karta po prawej stronie
+- Animacje slide-in/out (framer-motion)
+- Mapa satelitarna (Esri - darmowa, bez API key)
+- Przełącznik warstw: Satelita / Teren / Mapa
+- Nawigacja Poprz./Nast. dla wielu działek
+- Karta znika gdy user kontynuuje rozmowę
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    DISCOVERY LAYOUT                          │
+│                                                              │
+│     [AWATAR]              ┌──────────────────────────┐      │
+│       ~~~                 │ [MAPA SATELITARNA]       │      │
+│                           │     📍 działka           │      │
+│    "Znalazłem coś        │                          │      │
+│     dla Ciebie!"         ├──────────────────────────┤      │
+│                           │ Kolbudy, 1,234 m²        │      │
+│    [Chat history]         │                          │      │
+│                           │ DLACZEGO:                │      │
+│    [___input___]          │ • Cisza: 92/100         │      │
+│                           │ • Natura: 85/100        │      │
+│                           │ • MPZP: MN              │      │
+│                           │                          │      │
+│                           │ [← Poprz] 1/5 [Nast →]  │      │
+│                           └──────────────────────────┘      │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -94,25 +147,28 @@ Interaktywny agent AI (z awatarem/postacią) który:
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         FRONTEND                                     │
-│   React + Leaflet + Chat UI + Avatar                                │
+│   React + Leaflet + Chat UI + Avatar + ParcelReveal                 │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ WebSocket / REST
 ┌────────────────────────────▼────────────────────────────────────────┐
 │                      AGENT LAYER (FastAPI)                           │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
 │  │ ParcelAgent │  │ Tools       │  │ EventStream │                  │
-│  │ (Claude API)│  │ (15 tools)  │  │ (WebSocket) │                  │
+│  │ (Claude API)│  │ (13 tools)  │  │ (WebSocket) │                  │
 │  └─────────────┘  └─────────────┘  └─────────────┘                  │
 │                           │                                          │
 │  Patterns: Human-in-the-Loop | Guard | Critic | Few-Shot            │
+│  System Prompt: Rich data context with all available dimensions     │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────────────┐
-│                     SEARCH LAYER                                     │
+│                     SEARCH LAYER (Graph as PRIMARY)                  │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │              HybridSearchService (RRF Fusion)                 │   │
-│  │   spatial_results (40%) + vector_results (30%) + graph (30%) │   │
+│  │   graph (50%) = PRIMARY + spatial (30%) + vector (20%)        │   │
 │  └──────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  Graph ALWAYS runs → Spatial (if lat/lon) → Vector (if similarity)  │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────────────┐
@@ -122,6 +178,7 @@ Interaktywny agent AI (z awatarem/postacią) który:
 │  │  (geometrie) │  │   (graf)     │  │  (wektory)   │               │
 │  │ 10,471 dział.│  │ 10,886 nodes │  │ 10,471 vec.  │               │
 │  │ 38 kolumn    │  │ 138,672 rels │  │ 64-dim SRAI  │               │
+│  │              │  │ = PRIMARY!   │  │              │               │
 │  └──────────────┘  └──────────────┘  └──────────────┘               │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -262,9 +319,21 @@ results = collection.search(
 
 | Narzędzie | Opis |
 |-----------|------|
-| `propose_search_preferences` | Zaproponuj preferencje (perceived state) |
+| `propose_search_preferences` | Zaproponuj preferencje (25+ pól - patrz niżej) |
 | `approve_search_preferences` | Zatwierdź po potwierdzeniu użytkownika |
 | `modify_search_preferences` | Zmień pojedynczą preferencję |
+
+**Dostępne pola preferencji (propose_search_preferences):**
+
+| Kategoria | Pola |
+|-----------|------|
+| **Lokalizacja** | `gmina`, `miejscowosc`, `powiat`, `charakter_terenu` (wiejski/podmiejski/miejski/leśny/mieszany) |
+| **Powierzchnia** | `min_area`, `max_area`, `area_category` (mala/srednia/duza/bardzo_duza) |
+| **Cisza** | `quietness_categories` (bardzo_cicha/cicha/umiarkowana/głośna), `max_dist_to_industrial_m` |
+| **Natura** | `nature_categories`, `max_dist_to_forest_m`, `max_dist_to_water_m`, `min_forest_pct_500m` |
+| **Gęstość** | `building_density` (bardzo_gesta/gesta/umiarkowana/rzadka/bardzo_rzadka) |
+| **Dostępność** | `accessibility_categories`, `max_dist_to_school_m`, `max_dist_to_shop_m`, `max_dist_to_bus_stop_m`, `has_road_access` |
+| **MPZP** | `has_mpzp`, `mpzp_budowlane`, `mpzp_symbols` (MN/MN_U/MW/U/R/ZL...) |
 
 ### Wyszukiwanie (Guard Pattern)
 
@@ -301,33 +370,154 @@ results = collection.search(
 ## Conversation Flow (Few-Shot Pattern)
 
 ```
-1. User: "Szukam działki blisko Gdańska, ok 1000 m²"
+1. User: "Szukam działki blisko Gdańska, ok 1000 m², cicho i blisko lasu"
 
 2. Agent → propose_search_preferences({
-     location_description: "okolice Gdańska",
-     min_area_m2: 800, max_area_m2: 1200
+     gmina: "Gdańsk",
+     charakter_terenu: ["podmiejski"],
+     min_area: 800, max_area: 1200,
+     area_category: ["srednia"],
+     quietness_categories: ["bardzo_cicha", "cicha"],
+     nature_categories: ["bardzo_zielona", "zielona"],
+     max_dist_to_forest_m: 300
    })
-   Agent: "Czy te preferencje są poprawne?"
+   Agent: "Szukam średnich (800-1200 m²), cichych działek w podmiejskich
+           rejonach Gdańska, blisko lasu. Pasuje?"
 
-3. User: "Tak, ale chcę bliżej lasu"
+3. User: "Tak, ale chcę z planem miejscowym, żeby łatwiej budować"
 
 4. Agent → modify_search_preferences({
-     field: "nature_weight", new_value: 0.7
+     field: "has_mpzp", new_value: true
    })
-   Agent: "Zatwierdzamy?"
+   Agent → modify_search_preferences({
+     field: "mpzp_budowlane", new_value: true
+   })
+   Agent: "Dodam działki z MPZP budowlanym. Zatwierdzamy?"
 
 5. User: "Tak, szukaj"
 
 6. Agent → approve_search_preferences()
    Agent → execute_search({limit: 5})
    Agent: "Znalazłem 47 działek, oto 5 najlepszych..."
+   [Karta z mapą pojawia się płynnie]
 
-7. User: "Te są za blisko drogi"
+7. User: "Ta jest za mała, pokaż większe"
 
-8. Agent → critique_search_results({feedback: "za blisko drogi"})
-   Agent → refine_search({adjustment: "zwiększ wagę ciszy"})
-   Agent: "Szukam cichszych lokalizacji..."
+8. Agent → critique_search_results({feedback: "za małe działki"})
+   Agent → refine_search({adjustment: "increase_area"})
+   Agent: "Szukam większych działek..."
 ```
+
+---
+
+## Frontend: Parcel Reveal System (2026-01-19)
+
+### Store: parcelRevealStore.ts
+
+```typescript
+interface ParcelRevealState {
+  parcels: ParcelWithExplanation[];  // Wszystkie działki z wyszukiwania
+  currentIndex: number;               // Aktualnie wyświetlana działka
+  isVisible: boolean;                 // Czy karta jest widoczna
+  mapLayer: 'satellite' | 'terrain' | 'streets';
+
+  // Actions
+  setParcels(parcels): void;
+  showReveal(): void;
+  hideReveal(): void;
+  nextParcel(): void;
+  prevParcel(): void;
+  setMapLayer(layer): void;
+  clear(): void;
+}
+
+interface ParcelWithExplanation {
+  parcel: SearchResultItem;
+  explanation: string;      // "Kolbudy, 1 234 m²"
+  highlights: string[];     // ["Cisza: 92/100", "Las: 150m", ...]
+}
+```
+
+### Komponenty reveal/
+
+| Komponent | Opis |
+|-----------|------|
+| `ParcelRevealCard.tsx` | Główna pływająca karta z animacjami (framer-motion) |
+| `ParcelMiniMap.tsx` | Leaflet map z tile layers (Esri satellite - darmowe) |
+| `MapLayerSwitcher.tsx` | Przyciski do przełączania warstw mapy |
+
+### Tile Layers (bez API key)
+
+```typescript
+const TILE_LAYERS = {
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  terrain: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+  streets: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+};
+```
+
+### Data Flow
+
+```
+1. User: "Szukam działki blisko lasu"
+   ↓
+2. Agent → execute_search()
+   ↓
+3. Backend: tools.py
+   - Wykonuje hybrid search
+   - Generuje highlights dla każdej działki
+   - Generuje explanation (lokalizacja + powierzchnia)
+   ↓
+4. WebSocket → tool_result {tool: "execute_search", result: {parcels: [...]}}
+   ↓
+5. App.tsx: handleToolResult()
+   - Parsuje parcels z highlights/explanation
+   - parcelRevealStore.setParcels(parcels)
+   - parcelRevealStore.showReveal()
+   ↓
+6. DiscoveryPhase.tsx
+   - AnimatePresence renderuje ParcelRevealCard
+   - Karta slide-in z prawej strony
+   ↓
+7. User: wysyła nową wiadomość
+   ↓
+8. useChat.ts: handleSubmit()
+   - parcelRevealStore.hideReveal()
+   - Karta slide-out
+```
+
+### Backend: Highlights Generation
+
+```python
+# backend/app/agent/tools.py
+
+def _generate_highlights(parcel: dict, prefs: dict) -> list[str]:
+    highlights = []
+
+    # Cisza (quietness)
+    if parcel.get("quietness_score", 0) >= 85:
+        highlights.append(f"Cisza: {parcel['quietness_score']}/100")
+
+    # Natura
+    if parcel.get("nature_score", 0) >= 70:
+        highlights.append(f"Natura: {parcel['nature_score']}/100")
+
+    # MPZP
+    if parcel.get("has_mpzp"):
+        highlights.append(f"MPZP: {parcel.get('mpzp_symbol', '')}")
+
+    return highlights[:4]  # Max 4 highlights
+```
+
+### Zmiany w istniejących plikach
+
+| Plik | Zmiana |
+|------|--------|
+| `searchStore.ts` | Usunięto auto-transition do Results po setMapData() |
+| `useChat.ts` | Dodano hideReveal() przy wysyłaniu wiadomości |
+| `App.tsx` | Obsługa execute_search tool_result → parcelRevealStore |
+| `index.css` | Usunięto dark filter na mapie (dla satelity) |
+| `tools.py` | Dodano _generate_highlights() i _generate_explanation() |
 
 ---
 
@@ -355,8 +545,43 @@ moja-dzialka/
 │       │   └── parcel_search.py       # Hybrid search (RRF)
 │       └── agent/
 │           ├── __init__.py
-│           ├── tools.py               # 15 agent tools + state
+│           ├── tools.py               # 15 agent tools + state + highlights
 │           └── orchestrator.py        # ParcelAgent + streaming
+├── frontend/
+│   └── src/
+│       ├── App.tsx                    # Root + WebSocket event handling
+│       ├── index.css                  # Tailwind + Leaflet styles
+│       ├── components/
+│       │   ├── phases/
+│       │   │   ├── DiscoveryPhase.tsx     # Główna faza (awatar + chat)
+│       │   │   ├── ResultsPhase.tsx       # Faza wyników (3-panelowa)
+│       │   │   └── PhaseTransition.tsx    # Menedżer faz
+│       │   ├── chat/
+│       │   │   ├── DiscoveryChat.tsx      # Chat w Discovery
+│       │   │   └── ResultsChat.tsx        # Chat w Results
+│       │   ├── avatar/
+│       │   │   ├── AvatarFull.tsx         # Pełny awatar (Rive)
+│       │   │   └── AvatarCompact.tsx      # Kompaktowy awatar
+│       │   ├── reveal/                    # ✨ NOWE (2026-01-19)
+│       │   │   ├── ParcelRevealCard.tsx   # Pływająca karta z działką
+│       │   │   ├── ParcelMiniMap.tsx      # Mini mapa Leaflet
+│       │   │   ├── MapLayerSwitcher.tsx   # Przełącznik warstw
+│       │   │   └── index.ts               # Barrel export
+│       │   ├── MapPanel.tsx               # Panel mapy (Results)
+│       │   └── effects/
+│       │       └── ParticleBackground.tsx # Efekt cząsteczek
+│       ├── stores/
+│       │   ├── chatStore.ts               # Stan czatu (Zustand)
+│       │   ├── searchStore.ts             # Stan wyszukiwania
+│       │   ├── uiPhaseStore.ts            # Stan fazy UI
+│       │   └── parcelRevealStore.ts       # ✨ NOWY: Stan reveal flow
+│       ├── hooks/
+│       │   └── useChat.ts                 # Hook czatu + quick actions
+│       ├── services/
+│       │   ├── websocket.ts               # WebSocket client
+│       │   └── api.ts                     # REST API client
+│       └── types/
+│           └── index.ts                   # TypeScript interfaces
 ├── scripts/
 │   ├── init-db.sql                    # PostGIS schema
 │   └── pipeline/
@@ -424,16 +649,22 @@ moja-dzialka/
 
 ---
 
-## Hybrid Search (RRF Fusion)
+## Hybrid Search (RRF Fusion) - Graph as PRIMARY
 
 ```python
-# Reciprocal Rank Fusion combining 3 sources
-SPATIAL_WEIGHT = 0.4   # PostGIS (distance, area filters)
-VECTOR_WEIGHT = 0.3    # Milvus (SRAI similarity)
-GRAPH_WEIGHT = 0.3     # Neo4j (MPZP, relationships)
+# Reciprocal Rank Fusion with Graph as PRIMARY source
+# Graph ALWAYS runs, provides main filtering by categories
+GRAPH_WEIGHT = 0.5     # Neo4j (PRIMARY - categories, MPZP, relationships)
+SPATIAL_WEIGHT = 0.3   # PostGIS (distance, area, geometry)
+VECTOR_WEIGHT = 0.2    # Milvus (similarity to reference parcel)
 
 # RRF Score = Σ(weight / (K + rank))
 # K = 60 (standard constant)
+
+# Search strategy:
+# 1. Graph search ALWAYS runs (even without explicit criteria)
+# 2. Spatial search runs if lat/lon provided
+# 3. Vector search runs if similarity_to_parcel_id provided
 ```
 
 ---
@@ -479,7 +710,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-### 4. Test API
+### 4. Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev      # Development server (port 5173)
+npm run build    # Production build
+```
+
+### 5. Test API
 
 ```bash
 # Health check
@@ -530,4 +770,4 @@ Location: `/home/marcin/ai-edu/`
 
 ---
 
-*Ostatnia aktualizacja: 2026-01-18 22:15 UTC*
+*Ostatnia aktualizacja: 2026-01-19 (Graph as PRIMARY + 25+ preference fields)*

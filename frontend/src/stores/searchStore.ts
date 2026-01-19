@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { SearchPreferences, SearchResultItem, ParcelDetails, SearchResponse, MapData } from '@/types';
+import { useUIPhaseStore } from './uiPhaseStore';
 
 interface SearchState {
   // Search state
@@ -110,14 +111,25 @@ export const useSearchStore = create<SearchState>((set) => ({
   setMapZoom: (zoom) =>
     set({ mapZoom: zoom }),
 
-  setMapData: (data) =>
+  setMapData: (data) => {
     set((state) => ({
       mapData: data,
       // Update center if provided
       mapCenter: data?.center
         ? { lat: data.center.lat, lng: data.center.lon }
         : state.mapCenter,
-    })),
+    }));
+
+    // Set avatar mood when map data arrives (but don't transition to results)
+    // The reveal card will handle showing parcels in discovery layout
+    if (data?.geojson?.features?.length) {
+      const { setHasMapData, setAvatarMood } = useUIPhaseStore.getState();
+      setHasMapData(true);
+      setAvatarMood('excited');
+      // NOTE: Removed auto-transition to results phase
+      // Parcels are now shown via ParcelRevealCard in Discovery layout
+    }
+  },
 
   setGminy: (gminy) =>
     set({ gminy, isLoadingGminy: false }),

@@ -218,9 +218,10 @@
   @apply bg-slate-900 font-display;
 }
 
-.leaflet-tile-pane {
+/* NOTE: Removed dark filter for satellite/terrain maps to show natural colors */
+/* .leaflet-tile-pane {
   filter: saturate(0.8) brightness(0.85);
-}
+} */
 
 .leaflet-control-zoom {
   @apply border-none !important;
@@ -247,6 +248,12 @@
 .marker-cluster {
   @apply bg-amber-500/80 border-2 border-amber-300 rounded-full
          flex items-center justify-center font-bold text-slate-900;
+}
+
+/* Custom parcel marker icon */
+.parcel-marker-icon {
+  background: transparent !important;
+  border: none !important;
 }
 
 /* ============================================

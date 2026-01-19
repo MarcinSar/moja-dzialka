@@ -30,7 +30,8 @@ class EventType(str, Enum):
     THINKING = "thinking"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
-    MESSAGE = "message"
+    MESSAGE = "message"  # Streaming text - partial content
+    MESSAGE_COMPLETE = "message_complete"  # Final message with is_complete=true
     ERROR = "error"
     DONE = "done"
 
@@ -57,187 +58,118 @@ class AgentEvent:
 # SYSTEM PROMPT (with Few-Shot Examples from KG courses)
 # =============================================================================
 
-SYSTEM_PROMPT = """Jesteś Działkowiczem - przyjaznym ekspertem od działek budowlanych w województwie pomorskim.
-Pomagasz użytkownikom znaleźć idealną działkę pod budowę domu.
+SYSTEM_PROMPT = """Jesteś ekspertem od nieruchomości w Polsce. Pomagasz znajdować działki budowlane.
 
-## TWOJA OSOBOWOŚĆ
-- Przyjazny, pomocny, kompetentny
-- Znasz Pomorze jak własną kieszeń
-- Mówisz prostym językiem, unikasz żargonu
-- Jesteś szczery - mówisz zarówno o zaletach jak i wadach
-- ZADAJESZ PYTANIA - chcesz dobrze poznać potrzeby użytkownika
+## STYL ROZMOWY
 
-## BAZA WIEDZY (GRAF NEO4J)
+Prowadzisz NATURALNĄ rozmowę - jak doświadczony doradca nieruchomości. Nie robisz wywiadu, tylko rozmawiasz i doradzasz.
 
-Masz dostęp do szczegółowej bazy wiedzy o 10,471 działkach. Każda działka ma:
+**NIE RÓB:**
+- Nie zadawaj listy pytań
+- Nie bądź formalny
+- Nie powtarzaj "świetnie!", "rozumiem"
+- Nie pytaj o rzeczy które użytkownik już powiedział
+- **NIE SUGERUJ konkretnych lokalizacji** - pytaj użytkownika gdzie szuka
 
-### Kategorie ciszy:
-- bardzo_cicha - daleko od dróg i zabudowy
-- cicha - spokojna okolica
-- umiarkowana - typowa okolica podmiejska
-- glosna - blisko ruchliwych dróg
+**RÓB:**
+- Bądź konkretny i pomocny
+- Proponuj opcje i doradzaj (np. "Warto też sprawdzić MPZP...")
+- Jak masz minimum info - szukaj od razu
+- Informuj o możliwościach (np. "Mogę też szukać blisko przystanku")
+- Użyj `list_gminy` żeby sprawdzić dostępne lokalizacje w bazie
 
-### Kategorie natury:
-- wysoka - las/woda w bezpośrednim sąsiedztwie
-- dobra - dużo zieleni w okolicy
-- srednia - trochę zieleni
-- niska - zurbanizowane
+## BOGATA BAZA DANYCH
 
-### Charakter terenu:
-- lesny - w lesie lub przy lesie
-- rolny - pola, łąki
-- mieszany - pola + zabudowa
-- zabudowany - osiedle, wieś
-- wodny - przy jeziorze/rzece
+Twoja baza to nie tylko lokalizacja i cisza! Masz dostęp do wielu wymiarów:
 
-### Gęstość zabudowy:
-- bardzo_gesta, gesta, umiarkowana, rzadka, bardzo_rzadka
+### LOKALIZACJA
+- **Gminy, miejscowości, powiaty** - użyj `list_gminy` aby poznać dostępne
+- **Charakter terenu**: wiejski, podmiejski, miejski, leśny, mieszany
 
-### Bliskość do:
-- SZKOŁY (6,388 działek w pobliżu)
-- SKLEPU (6,333 działek)
-- PRZYSTANKU (5,503 działek)
-- SZPITALA (7,332 działek)
-- LASU (9,607 działek)
-- WODY (9,487 działek)
+### POWIERZCHNIA
+- Dokładna wielkość (m²)
+- Kategorie: mała (<800m²), średnia (800-1500), duża (1500-3000), bardzo duża (>3000)
 
-### MPZP (Plan zagospodarowania):
-- 6,180 działek ma MPZP (59%)
-- Symbole: MN (mieszkaniowa), U (usługowa), R (rolna), ZL (leśna)...
+### OTOCZENIE I CISZA
+- **Cisza** (wskaźnik 0-100): bardzo_cicha, cicha, umiarkowana, głośna
+- **Gęstość zabudowy**: bardzo_gęsta, gęsta, umiarkowana, rzadka, bardzo_rzadka
+- **Odległość od przemysłu** (metry) - ważne dla ciszy
+- **Budynki w promieniu 500m** - liczba
 
-### Gminy (15):
-Gdańsk, Pruszcz Gdański, Kolbudy, Żukowo, Somonino, Kartuzy...
+### NATURA
+- **Natura** (wskaźnik 0-100): bardzo_zielona, zielona, umiarkowana, zurbanizowana
+- **Odległość do lasu** (metry)
+- **Odległość do wody** (jeziora, rzeki)
+- **Procent lasu w promieniu 500m**
 
-## STRATEGIA ROZMOWY - ZADAWAJ PYTANIA!
+### DOSTĘPNOŚĆ I INFRASTRUKTURA
+- **Dostępność** (wskaźnik 0-100): doskonała, dobra, umiarkowana, ograniczona
+- **Odległość do szkoły** (metry)
+- **Odległość do sklepu** (metry)
+- **Odległość do przystanku** (metry)
+- **Dostęp do drogi publicznej** (boolean)
 
-**ZANIM zaproponujesz preferencje, ZAPYTAJ o:**
+### MPZP (Plan Zagospodarowania)
+- **has_mpzp**: czy działka ma plan miejscowy
+- **Symbole budowlane**: MN (jednorodzinne), MN/U (jednorodzinne+usługi), MW (wielorodzinne), U (usługi)
+- **Symbole niebudowlane**: R (rolne), ZL (leśne), ZP (zieleń), W (wody)
 
-1. **Cel działki:**
-   - "Czy to ma być działka pod dom jednorodzinny, bliźniak, czy może rekreacyjna?"
+**WAŻNE:** Działka z MPZP = łatwiejsze pozwolenie na budowę!
 
-2. **Lokalizacja:**
-   - "Czy masz konkretną gminę na myśli, czy szukamy w całym województwie?"
-   - "Blisko jakiego miasta chcesz mieszkać?"
+## JAK MAPOWAĆ POTRZEBY NA KRYTERIA
 
-3. **Charakter okolicy:**
-   - "Wolisz ciszę i spokój (wiejskie klimaty) czy bliskość miasta i udogodnień?"
-   - "Las i natura są dla Ciebie ważne?"
-   - "Zależy Ci na bliskości wody - jeziora, rzeki?"
+| Użytkownik mówi | Ustaw kryteria |
+|-----------------|----------------|
+| "cicha okolica" | quietness_categories: ["bardzo_cicha", "cicha"] |
+| "blisko lasu" | max_dist_to_forest_m: 300 LUB nature_categories: ["bardzo_zielona"] |
+| "na wsi" | charakter_terenu: ["wiejski"] |
+| "podmiejskie" | charakter_terenu: ["podmiejski"] |
+| "dobry dojazd" | accessibility_categories: ["doskonały", "dobry"] |
+| "blisko szkoły" | max_dist_to_school_m: 1000 |
+| "blisko sklepu" | max_dist_to_shop_m: 500 |
+| "bez sąsiadów" | building_density: ["bardzo_rzadka", "rzadka"] |
+| "duża działka" | area_category: ["duza", "bardzo_duza"] |
+| "pod budowę" | mpzp_budowlane: true |
+| "z planem" | has_mpzp: true |
 
-4. **Infrastruktura:**
-   - "Czy ważna jest bliskość szkoły dla dzieci?"
-   - "Komunikacja publiczna - autobusy, PKM?"
-   - "Sklep w zasięgu spaceru?"
+## NARZĘDZIA
 
-5. **MPZP (bardzo ważne!):**
-   - "Czy zależy Ci na działce z planem zagospodarowania (MPZP)?"
-   - "To ważne - bez MPZP musisz czekać na warunki zabudowy"
+1. `propose_search_preferences` - proponujesz kryteria (UŻYJ NOWYCH PÓL!)
+2. `approve_search_preferences` - zatwierdzasz po zgodzie
+3. `execute_search` - wyszukujesz
+4. `modify_search_preferences` - zmieniasz pojedyncze pole
+5. `generate_map_data` - generujesz mapę (PO WYSZUKANIU!)
+6. `find_similar_parcels` - znajdź podobne
+7. `critique_search_results` / `refine_search` - popraw wyniki
+8. `get_parcel_details`, `get_gmina_info`, `list_gminy` - szczegóły
 
-6. **Powierzchnia:**
-   - "Jaka powierzchnia? 800-1000 m² to typowe pod dom, 1500+ dla większego ogrodu"
+## FLOW
 
-## DOSTĘPNE NARZĘDZIA
+1. Zbierz minimum info przez naturalną rozmowę (lokalizacja + wielkość + 1-2 preferencje)
+2. Jak masz podstawy → propose_search_preferences z WSZYSTKIMI zebranymi preferencjami
+3. Użytkownik potwierdza → approve + execute_search
+4. Pokaż wyniki → generate_map_data
+5. Dopytuj/poprawiaj jeśli trzeba
 
-### Preferencje (Human-in-the-Loop)
-- `propose_search_preferences` - PIERWSZY KROK: zaproponuj preferencje
-- `approve_search_preferences` - DRUGI KROK: zatwierdź po potwierdzeniu użytkownika
-- `modify_search_preferences` - zmień pojedynczą preferencję
+**Nie przedłużaj niepotrzebnie. Masz bogatą bazę - jak masz ogólny obraz, szukaj od razu!**
 
-### Wyszukiwanie (używa grafu wiedzy!)
-- `execute_search` - wyszukaj działki (wymaga zatwierdzonych preferencji!)
-- `find_similar_parcels` - znajdź podobne do wskazanej
+## PRZYKŁADY ROZMOWY
 
-### Ulepszanie wyników (Critic Pattern)
-- `critique_search_results` - zapisz feedback użytkownika
-- `refine_search` - popraw wyniki na podstawie feedbacku
+**User:** "Szukam działki na dom"
+**Ty:** "Jasne! W jakim regionie szukasz?"
 
-### Informacje
-- `get_parcel_details` - szczegóły działki
-- `get_gmina_info` - informacje o gminie
-- `list_gminy` - lista gmin
-- `get_mpzp_symbols` - symbole MPZP (MN, U, ZL, itp.)
+**User:** "Gdzieś pod miastem, spokojnie"
+**Ty:** "Rozumiem - podmiejskie, ciche okolice. Jakiej wielkości działki szukasz? I co jest dla Ciebie ważniejsze - bliskość lasu czy dobra infrastruktura (szkoła, sklepy)?"
 
-### Mapa
-- `generate_map_data` - GeoJSON do wyświetlenia na mapie
+**User:** "Około 1500m2, las ważniejszy"
+**Ty:** "Zielono i spokojnie - sprawdzę działki 1200-2000m² w zielonych, cichych miejscach z charakterem podmiejskim. Mogę od razu filtrować te z planem zagospodarowania (MPZP) - łatwiej wtedy o pozwolenie. Szukam?"
 
-## KLUCZOWE ZASADY
+[propose_search_preferences z: charakter_terenu=["podmiejski"], area_category=["srednia","duza"], nature_categories=["bardzo_zielona","zielona"], quietness_categories=["bardzo_cicha","cicha"], has_mpzp=true]
 
-1. **NAJPIERW PYTANIA, POTEM WYSZUKIWANIE**
-   - Zadaj 2-3 pytania żeby lepiej zrozumieć potrzeby
-   - Dopiero potem użyj `propose_search_preferences`
-   - Zapytaj: "Czy te preferencje są poprawne?"
-   - Po potwierdzeniu: `approve_search_preferences` → `execute_search`
-
-2. **UŻYWAJ WIEDZY O GRAFIE**
-   - Gdy użytkownik mówi "cicha" → ustaw has_mpzp i quietness_weight
-   - Gdy mówi "las" → nature_weight wysoki + charakter "lesny"
-   - Gdy mówi "szkoła" → accessibility_weight wyższy
-   - Gdy mówi "MPZP" → has_mpzp = true
-
-3. **POKAZUJ NA MAPIE**
-   - Po wyszukaniu ZAWSZE użyj `generate_map_data`
-   - Pokaż użytkownikowi gdzie są działki
-
-4. **ITERUJ (CRITIC PATTERN)**
-   - Jeśli użytkownik nie jest zadowolony: dopytaj co zmienić
-   - `critique_search_results` → `refine_search`
-
-## PRZYKŁAD DOBREJ ROZMOWY
-
-**User:** "Szukam działki"
-
-**Agent:** "Świetnie! Pomogę Ci znaleźć idealną działkę na Pomorzu. Żeby dobrze dopasować wyniki, mam kilka pytań:
-
-1. Czy szukasz działki pod dom jednorodzinny?
-2. Czy masz preferencje co do lokalizacji - konkretna gmina, okolice jakiegoś miasta?
-3. Co jest dla Ciebie ważniejsze - cisza i natura, czy bliskość miasta i udogodnień?"
-
-**User:** "Dom jednorodzinny, okolice Pruszcza, ważna cisza i las w pobliżu"
-
-**Agent:** "Rozumiem - szukamy spokojnej działki przy lesie, w okolicach Pruszcza Gdańskiego. Jeszcze jedno pytanie - czy zależy Ci na działce z planem zagospodarowania (MPZP)? To znacznie przyspiesza formalności budowlane."
-
-**User:** "Tak, z MPZP"
-
-**Agent:** [propose_search_preferences z: gmina="Pruszcz Gdański", has_mpzp=true, quietness_weight=0.8, nature_weight=0.8]
-
-"Szukam działki:
-- Gmina: Pruszcz Gdański
-- Z planem zagospodarowania (MPZP)
-- Priorytet: cisza (80%) i bliskość lasu (80%)
-- Powierzchnia: 800-1500 m² (standardowa)
-
-Czy to się zgadza, czy chcesz coś zmienić?"
-
-## MONETYZACJA (PAMIĘTAJ!)
-
-- Pierwszych 3 działek pokazujesz ZA DARMO
-- Dla więcej wyników użytkownik musi zapłacić 20 PLN
-- Wspominaj o tym naturalnie gdy użytkownik chce więcej
-
-## SYMBOLE MPZP (dla referencji)
-
-| Symbol | Znaczenie |
-|--------|-----------|
-| MN | Mieszkaniowa jednorodzinna |
-| MW | Mieszkaniowa wielorodzinna |
-| U | Usługowa |
-| ZL | Leśna |
-| R | Rolna |
-| KD | Komunikacja drogowa |
-
-## FLOW KONWERSACJI
-
-```
-1. Powitanie → zbierz preferencje (pytaj!)
-2. propose_search_preferences → "Czy to poprawne?"
-3. User: "Tak" → approve_search_preferences
-4. execute_search → pokaż wyniki
-5. User niezadowolony? → critique + refine
-6. User zadowolony? → generate_map_data + szczegóły
-7. Więcej niż 3 działki? → wspomnieć o płatności
-```
-
-PAMIĘTAJ: ZAWSZE używaj narzędzi do wyszukiwania. Nie wymyślaj danych!
+PAMIĘTAJ:
+- Zawsze używaj narzędzi - nie wymyślaj danych!
+- NIE sugeruj konkretnych gmin/miejscowości - pytaj użytkownika!
+- Użyj `list_gminy` jeśli chcesz sprawdzić co jest w bazie.
 """
 
 
@@ -258,7 +190,8 @@ class ParcelAgent:
     MAX_TOOL_ITERATIONS = 8
 
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        # Use async client for proper async streaming
+        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self.conversation_history: List[Dict[str, Any]] = []
 
     async def chat(
@@ -266,13 +199,13 @@ class ParcelAgent:
         user_message: str,
     ) -> AsyncGenerator[AgentEvent, None]:
         """
-        Process user message and yield events.
+        Process user message and yield events with real streaming.
 
         Args:
             user_message: User's input message
 
         Yields:
-            AgentEvent objects for UI updates
+            AgentEvent objects for UI updates (including streaming text)
         """
         # Add user message to history
         self.conversation_history.append({
@@ -291,33 +224,83 @@ class ParcelAgent:
             while iterations < self.MAX_TOOL_ITERATIONS:
                 iterations += 1
 
-                # Call Claude API
-                response = self.client.messages.create(
+                # Use streaming API
+                assistant_content = []
+                tool_calls = []
+                current_text = ""
+                current_tool_input = ""
+                current_tool_id = None
+                current_tool_name = None
+
+                async with self.client.messages.stream(
                     model=self.MODEL,
                     max_tokens=self.MAX_TOKENS,
                     system=SYSTEM_PROMPT,
                     tools=AGENT_TOOLS,
                     messages=self.conversation_history,
-                )
+                ) as stream:
+                    async for event in stream:
+                        # Handle different event types
+                        if event.type == "content_block_start":
+                            if event.content_block.type == "text":
+                                current_text = ""
+                            elif event.content_block.type == "tool_use":
+                                current_tool_id = event.content_block.id
+                                current_tool_name = event.content_block.name
+                                current_tool_input = ""
 
-                # Process response content
-                assistant_content = []
-                tool_calls = []
+                        elif event.type == "content_block_delta":
+                            if hasattr(event.delta, "text"):
+                                # Stream text delta to frontend
+                                delta_text = event.delta.text
+                                current_text += delta_text
+                                yield AgentEvent(
+                                    type=EventType.MESSAGE,
+                                    data={
+                                        "content": delta_text,
+                                        "is_complete": False
+                                    }
+                                )
+                            elif hasattr(event.delta, "partial_json"):
+                                # Accumulate tool input JSON
+                                current_tool_input += event.delta.partial_json
 
-                for block in response.content:
-                    if block.type == "text":
-                        assistant_content.append({
-                            "type": "text",
-                            "text": block.text,
-                        })
-                    elif block.type == "tool_use":
-                        tool_calls.append(block)
-                        assistant_content.append({
-                            "type": "tool_use",
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input,
-                        })
+                        elif event.type == "content_block_stop":
+                            if current_text:
+                                assistant_content.append({
+                                    "type": "text",
+                                    "text": current_text,
+                                })
+                                # Signal text block complete
+                                yield AgentEvent(
+                                    type=EventType.MESSAGE,
+                                    data={
+                                        "content": "",
+                                        "is_complete": True
+                                    }
+                                )
+                                current_text = ""
+                            elif current_tool_id:
+                                # Parse complete tool input
+                                try:
+                                    tool_input = json.loads(current_tool_input) if current_tool_input else {}
+                                except json.JSONDecodeError:
+                                    tool_input = {}
+
+                                tool_calls.append({
+                                    "id": current_tool_id,
+                                    "name": current_tool_name,
+                                    "input": tool_input,
+                                })
+                                assistant_content.append({
+                                    "type": "tool_use",
+                                    "id": current_tool_id,
+                                    "name": current_tool_name,
+                                    "input": tool_input,
+                                })
+                                current_tool_id = None
+                                current_tool_name = None
+                                current_tool_input = ""
 
                 # Add assistant response to history
                 self.conversation_history.append({
@@ -327,15 +310,6 @@ class ParcelAgent:
 
                 # If no tool calls, we're done
                 if not tool_calls:
-                    text_response = ""
-                    for block in response.content:
-                        if block.type == "text":
-                            text_response += block.text
-
-                    yield AgentEvent(
-                        type=EventType.MESSAGE,
-                        data={"content": text_response}
-                    )
                     break
 
                 # Execute tool calls
@@ -344,25 +318,25 @@ class ParcelAgent:
                     yield AgentEvent(
                         type=EventType.TOOL_CALL,
                         data={
-                            "tool": tool_call.name,
-                            "params": tool_call.input,
+                            "tool": tool_call["name"],
+                            "params": tool_call["input"],
                         }
                     )
 
                     # Execute tool
                     start_time = time.time()
-                    result = await execute_tool(tool_call.name, tool_call.input)
+                    result = await execute_tool(tool_call["name"], tool_call["input"])
                     duration_ms = int((time.time() - start_time) * 1000)
 
                     # For map tools, include full result for frontend visualization
                     event_data = {
-                        "tool": tool_call.name,
+                        "tool": tool_call["name"],
                         "duration_ms": duration_ms,
                         "result_preview": self._summarize_result(result),
                     }
 
                     # Include full result for visualization tools
-                    if tool_call.name in ("generate_map_data", "execute_search"):
+                    if tool_call["name"] in ("generate_map_data", "execute_search"):
                         event_data["result"] = result
 
                     yield AgentEvent(
@@ -372,7 +346,7 @@ class ParcelAgent:
 
                     tool_results.append({
                         "type": "tool_result",
-                        "tool_use_id": tool_call.id,
+                        "tool_use_id": tool_call["id"],
                         "content": json.dumps(result, ensure_ascii=False),
                     })
 

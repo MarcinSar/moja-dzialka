@@ -8,6 +8,7 @@ interface ChatState {
   isConnected: boolean;
   isAgentTyping: boolean;
   connectionError: string | null;
+  currentStreamingId: string | null;
 
   // Session
   sessionId: string | null;
@@ -15,6 +16,9 @@ interface ChatState {
   // Actions
   addMessage: (message: ChatMessage) => void;
   updateMessage: (id: string, content: string, isComplete?: boolean) => void;
+  appendToLastMessage: (content: string) => void;
+  startStreaming: (id: string, initialContent: string) => void;
+  finishStreaming: () => void;
   addActivity: (activity: AgentActivity) => void;
   updateActivity: (id: string, updates: Partial<AgentActivity>) => void;
   setConnected: (connected: boolean) => void;
@@ -32,6 +36,7 @@ export const useChatStore = create<ChatState>((set) => ({
   isConnected: false,
   isAgentTyping: false,
   connectionError: null,
+  currentStreamingId: null,
   sessionId: null,
 
   // Actions
@@ -48,6 +53,55 @@ export const useChatStore = create<ChatState>((set) => ({
           : msg
       ),
     })),
+
+  // Start a new streaming message
+  startStreaming: (id, initialContent) =>
+    set((state) => ({
+      currentStreamingId: id,
+      isAgentTyping: true,
+      messages: [
+        ...state.messages,
+        {
+          id,
+          role: 'assistant' as const,
+          content: initialContent,
+          timestamp: new Date(),
+          isStreaming: true,
+        },
+      ],
+    })),
+
+  // Append content to the current streaming message
+  appendToLastMessage: (content) =>
+    set((state) => {
+      const streamingId = state.currentStreamingId;
+      if (!streamingId) return state;
+
+      return {
+        messages: state.messages.map((msg) =>
+          msg.id === streamingId
+            ? { ...msg, content: msg.content + content }
+            : msg
+        ),
+      };
+    }),
+
+  // Finish streaming
+  finishStreaming: () =>
+    set((state) => {
+      const streamingId = state.currentStreamingId;
+      if (!streamingId) return { isAgentTyping: false, currentStreamingId: null };
+
+      return {
+        currentStreamingId: null,
+        isAgentTyping: false,
+        messages: state.messages.map((msg) =>
+          msg.id === streamingId
+            ? { ...msg, isStreaming: false }
+            : msg
+        ),
+      };
+    }),
 
   addActivity: (activity) =>
     set((state) => ({

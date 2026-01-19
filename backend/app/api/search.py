@@ -57,7 +57,7 @@ async def search_parcels(
             max_area=preferences.max_area_m2,
             has_mpzp=preferences.has_mpzp,
             mpzp_budowlane=preferences.mpzp_budowlane,
-            mpzp_symbol=preferences.mpzp_symbol,
+            mpzp_symbols=[preferences.mpzp_symbol] if preferences.mpzp_symbol else None,
             quietness_weight=preferences.quietness_weight,
             nature_weight=preferences.nature_weight,
             accessibility_weight=preferences.accessibility_weight,

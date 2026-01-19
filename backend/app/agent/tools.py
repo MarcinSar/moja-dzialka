@@ -91,20 +91,36 @@ AGENT_TOOLS = [
 Zaproponuj preferencje wyszukiwania na podstawie rozmowy z użytkownikiem.
 To jest PIERWSZY KROK - propozycja wymaga potwierdzenia użytkownika.
 
-UŻYJ gdy zrozumiałeś czego szuka użytkownik i chcesz potwierdzić.
+UŻYWAJ WSZYSTKICH DOSTĘPNYCH KRYTERIÓW! Masz bogatą bazę danych.
 Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
 """,
         "input_schema": {
             "type": "object",
             "properties": {
+                # === LOKALIZACJA ===
                 "location_description": {
                     "type": "string",
                     "description": "Opis lokalizacji (np. 'okolice Gdańska', 'gmina Żukowo')"
                 },
                 "gmina": {
                     "type": "string",
-                    "description": "Konkretna gmina (jeśli znana)"
+                    "description": "Konkretna gmina"
                 },
+                "miejscowosc": {
+                    "type": "string",
+                    "description": "Konkretna miejscowość"
+                },
+                "powiat": {
+                    "type": "string",
+                    "description": "Powiat (gdański, kartuski, Gdańsk)"
+                },
+                "charakter_terenu": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["wiejski", "podmiejski", "miejski", "leśny", "mieszany"]},
+                    "description": "Charakter terenu"
+                },
+
+                # === POWIERZCHNIA ===
                 "min_area_m2": {
                     "type": "number",
                     "description": "Minimalna powierzchnia w m²"
@@ -113,18 +129,71 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                     "type": "number",
                     "description": "Maksymalna powierzchnia w m²"
                 },
-                "quietness_weight": {
-                    "type": "number",
-                    "description": "Waga cichej okolicy (0-1, domyślnie 0.5)"
+                "area_category": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["mala", "srednia", "duza", "bardzo_duza"]},
+                    "description": "Kategorie powierzchni: mala (<800), srednia (800-1500), duza (1500-3000), bardzo_duza (>3000)"
                 },
-                "nature_weight": {
-                    "type": "number",
-                    "description": "Waga bliskości natury/lasu (0-1, domyślnie 0.3)"
+
+                # === CISZA I OTOCZENIE ===
+                "quietness_categories": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["bardzo_cicha", "cicha", "umiarkowana", "głośna"]},
+                    "description": "Kategorie ciszy (preferowane)"
                 },
-                "accessibility_weight": {
-                    "type": "number",
-                    "description": "Waga dostępności komunikacyjnej (0-1, domyślnie 0.2)"
+                "building_density": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["bardzo_gesta", "gesta", "umiarkowana", "rzadka", "bardzo_rzadka"]},
+                    "description": "Gęstość zabudowy w okolicy"
                 },
+                "min_dist_to_industrial_m": {
+                    "type": "integer",
+                    "description": "Min. odległość od przemysłu w metrach"
+                },
+
+                # === NATURA ===
+                "nature_categories": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["bardzo_zielona", "zielona", "umiarkowana", "zurbanizowana"]},
+                    "description": "Kategorie natury (preferowane)"
+                },
+                "max_dist_to_forest_m": {
+                    "type": "integer",
+                    "description": "Max. odległość do lasu w metrach"
+                },
+                "max_dist_to_water_m": {
+                    "type": "integer",
+                    "description": "Max. odległość do wody w metrach"
+                },
+                "min_forest_pct_500m": {
+                    "type": "number",
+                    "description": "Min. procent lasu w promieniu 500m (0-1)"
+                },
+
+                # === DOSTĘPNOŚĆ ===
+                "accessibility_categories": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["doskonały", "dobry", "umiarkowany", "ograniczony"]},
+                    "description": "Kategorie dostępności"
+                },
+                "max_dist_to_school_m": {
+                    "type": "integer",
+                    "description": "Max. odległość do szkoły w metrach"
+                },
+                "max_dist_to_shop_m": {
+                    "type": "integer",
+                    "description": "Max. odległość do sklepu w metrach"
+                },
+                "max_dist_to_bus_stop_m": {
+                    "type": "integer",
+                    "description": "Max. odległość do przystanku w metrach"
+                },
+                "has_road_access": {
+                    "type": "boolean",
+                    "description": "Czy działka musi mieć dostęp do drogi publicznej"
+                },
+
+                # === MPZP ===
                 "requires_mpzp": {
                     "type": "boolean",
                     "description": "Czy działka musi mieć MPZP"
@@ -132,6 +201,32 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                 "mpzp_buildable": {
                     "type": "boolean",
                     "description": "Czy MPZP musi być budowlane"
+                },
+                "mpzp_symbols": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Konkretne symbole MPZP (MN, MN/U, U, itd.)"
+                },
+
+                # === SORTOWANIE ===
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["quietness_score", "nature_score", "accessibility_score", "area_m2"],
+                    "description": "Po czym sortować wyniki"
+                },
+
+                # === LEGACY (backwards compatibility) ===
+                "quietness_weight": {
+                    "type": "number",
+                    "description": "[LEGACY] Waga cichej okolicy (0-1) - użyj quietness_categories"
+                },
+                "nature_weight": {
+                    "type": "number",
+                    "description": "[LEGACY] Waga bliskości natury (0-1) - użyj nature_categories"
+                },
+                "accessibility_weight": {
+                    "type": "number",
+                    "description": "[LEGACY] Waga dostępności (0-1) - użyj accessibility_categories"
                 }
             },
             "required": ["location_description"]
@@ -162,13 +257,20 @@ Użyj gdy użytkownik chce zmienić tylko jedną rzecz w propozycji.
             "properties": {
                 "field": {
                     "type": "string",
-                    "enum": ["gmina", "min_area_m2", "max_area_m2", "quietness_weight",
-                             "nature_weight", "accessibility_weight", "requires_mpzp"],
+                    "enum": [
+                        "gmina", "miejscowosc", "powiat", "charakter_terenu",
+                        "min_area_m2", "max_area_m2", "area_category",
+                        "quietness_categories", "building_density", "min_dist_to_industrial_m",
+                        "nature_categories", "max_dist_to_forest_m", "max_dist_to_water_m", "min_forest_pct_500m",
+                        "accessibility_categories", "max_dist_to_school_m", "max_dist_to_shop_m", "max_dist_to_bus_stop_m", "has_road_access",
+                        "requires_mpzp", "mpzp_buildable", "mpzp_symbols", "sort_by",
+                        "quietness_weight", "nature_weight", "accessibility_weight"
+                    ],
                     "description": "Pole do zmiany"
                 },
                 "new_value": {
-                    "type": ["string", "number", "boolean"],
-                    "description": "Nowa wartość"
+                    "type": ["string", "number", "boolean", "array"],
+                    "description": "Nowa wartość (string, number, boolean, lub array dla list)"
                 }
             },
             "required": ["field", "new_value"]
@@ -414,38 +516,111 @@ async def execute_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]
 # --------------- HUMAN-IN-THE-LOOP IMPLEMENTATIONS ---------------
 
 async def _propose_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Propose search preferences (perceived state)."""
+    """Propose search preferences (perceived state) with all available dimensions."""
     state = get_state()
 
+    # Build comprehensive preferences from all available parameters
     preferences = {
+        # Location
         "location_description": params.get("location_description", "województwo pomorskie"),
         "gmina": params.get("gmina"),
+        "miejscowosc": params.get("miejscowosc"),
+        "powiat": params.get("powiat"),
+        "charakter_terenu": params.get("charakter_terenu"),
+
+        # Area
         "min_area_m2": params.get("min_area_m2", 500),
         "max_area_m2": params.get("max_area_m2", 3000),
+        "area_category": params.get("area_category"),
+
+        # Quietness & Environment
+        "quietness_categories": params.get("quietness_categories"),
+        "building_density": params.get("building_density"),
+        "min_dist_to_industrial_m": params.get("min_dist_to_industrial_m"),
+
+        # Nature
+        "nature_categories": params.get("nature_categories"),
+        "max_dist_to_forest_m": params.get("max_dist_to_forest_m"),
+        "max_dist_to_water_m": params.get("max_dist_to_water_m"),
+        "min_forest_pct_500m": params.get("min_forest_pct_500m"),
+
+        # Accessibility
+        "accessibility_categories": params.get("accessibility_categories"),
+        "max_dist_to_school_m": params.get("max_dist_to_school_m"),
+        "max_dist_to_shop_m": params.get("max_dist_to_shop_m"),
+        "max_dist_to_bus_stop_m": params.get("max_dist_to_bus_stop_m"),
+        "has_road_access": params.get("has_road_access"),
+
+        # MPZP
+        "requires_mpzp": params.get("requires_mpzp", False),
+        "mpzp_buildable": params.get("mpzp_buildable"),
+        "mpzp_symbols": params.get("mpzp_symbols"),
+
+        # Sorting
+        "sort_by": params.get("sort_by", "quietness_score"),
+
+        # Legacy weights (for backwards compatibility)
         "quietness_weight": params.get("quietness_weight", 0.5),
         "nature_weight": params.get("nature_weight", 0.3),
         "accessibility_weight": params.get("accessibility_weight", 0.2),
-        "requires_mpzp": params.get("requires_mpzp", False),
-        "mpzp_buildable": params.get("mpzp_buildable"),
     }
 
     state.perceived_search_preferences = preferences
 
-    # Return formatted summary for user confirmation
+    # Build human-readable summary
+    summary = {
+        "lokalizacja": preferences["location_description"],
+        "gmina": preferences["gmina"] or "dowolna",
+    }
+
+    if preferences["miejscowosc"]:
+        summary["miejscowosc"] = preferences["miejscowosc"]
+    if preferences["charakter_terenu"]:
+        summary["charakter"] = ", ".join(preferences["charakter_terenu"])
+
+    summary["powierzchnia"] = f"{preferences['min_area_m2']}-{preferences['max_area_m2']} m²"
+
+    # Environment preferences
+    env_prefs = []
+    if preferences["quietness_categories"]:
+        env_prefs.append(f"cisza: {', '.join(preferences['quietness_categories'])}")
+    if preferences["nature_categories"]:
+        env_prefs.append(f"natura: {', '.join(preferences['nature_categories'])}")
+    if preferences["building_density"]:
+        env_prefs.append(f"zabudowa: {', '.join(preferences['building_density'])}")
+    if preferences["accessibility_categories"]:
+        env_prefs.append(f"dostęp: {', '.join(preferences['accessibility_categories'])}")
+    if env_prefs:
+        summary["preferencje_środowiska"] = env_prefs
+
+    # Distance constraints
+    dist_constraints = []
+    if preferences["max_dist_to_forest_m"]:
+        dist_constraints.append(f"las do {preferences['max_dist_to_forest_m']}m")
+    if preferences["max_dist_to_water_m"]:
+        dist_constraints.append(f"woda do {preferences['max_dist_to_water_m']}m")
+    if preferences["max_dist_to_school_m"]:
+        dist_constraints.append(f"szkoła do {preferences['max_dist_to_school_m']}m")
+    if preferences["max_dist_to_shop_m"]:
+        dist_constraints.append(f"sklep do {preferences['max_dist_to_shop_m']}m")
+    if dist_constraints:
+        summary["ograniczenia_odległości"] = dist_constraints
+
+    # MPZP
+    if preferences["requires_mpzp"]:
+        summary["mpzp"] = "wymagane"
+        if preferences["mpzp_buildable"]:
+            summary["mpzp"] += " (budowlane)"
+        if preferences["mpzp_symbols"]:
+            summary["mpzp"] += f" ({', '.join(preferences['mpzp_symbols'])})"
+    else:
+        summary["mpzp"] = "opcjonalne"
+
     return {
         "status": "proposed",
         "message": "Preferencje zaproponowane. Poproś użytkownika o potwierdzenie.",
-        "preferences": {
-            "lokalizacja": preferences["location_description"],
-            "gmina": preferences["gmina"] or "dowolna",
-            "powierzchnia": f"{preferences['min_area_m2']}-{preferences['max_area_m2']} m²",
-            "preferencje": {
-                "cisza": f"{int(preferences['quietness_weight'] * 100)}%",
-                "natura": f"{int(preferences['nature_weight'] * 100)}%",
-                "dostępność": f"{int(preferences['accessibility_weight'] * 100)}%",
-            },
-            "mpzp": "wymagane" if preferences["requires_mpzp"] else "opcjonalne",
-        },
+        "preferences": summary,
+        "raw_preferences": preferences,
         "next_step": "Zapytaj: 'Czy te preferencje są poprawne?' i użyj approve_search_preferences po potwierdzeniu.",
     }
 
@@ -476,10 +651,11 @@ async def _approve_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def _modify_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
-    """Modify a specific field in perceived preferences."""
+    """Modify a specific field in perceived AND approved preferences."""
     state = get_state()
 
-    if state.perceived_search_preferences is None:
+    # Check if we have any preferences to modify
+    if state.perceived_search_preferences is None and state.approved_search_preferences is None:
         return {
             "error": "Brak preferencji do modyfikacji",
             "message": "Najpierw użyj propose_search_preferences.",
@@ -488,10 +664,25 @@ async def _modify_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
     field = params["field"]
     new_value = params["new_value"]
 
-    if field not in state.perceived_search_preferences:
-        return {"error": f"Nieznane pole: {field}"}
+    # Convert 'null' string to None (agent sometimes sends 'null' as string)
+    if new_value == 'null' or new_value == 'None':
+        new_value = None
 
-    state.perceived_search_preferences[field] = new_value
+    # Modify perceived preferences if they exist
+    if state.perceived_search_preferences is not None:
+        if field not in state.perceived_search_preferences:
+            return {"error": f"Nieznane pole: {field}"}
+        state.perceived_search_preferences[field] = new_value
+
+    # ALSO modify approved preferences if they exist (so execute_search uses new value)
+    if state.approved_search_preferences is not None:
+        state.approved_search_preferences[field] = new_value
+        return {
+            "status": "modified_and_approved",
+            "field": field,
+            "new_value": new_value,
+            "message": f"Zmieniono {field} na {new_value}. Preferencje są już zatwierdzone - możesz od razu wywołać execute_search.",
+        }
 
     return {
         "status": "modified",
@@ -499,6 +690,100 @@ async def _modify_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
         "new_value": new_value,
         "message": f"Zmieniono {field} na {new_value}. Zapytaj o ponowne potwierdzenie.",
     }
+
+
+# --------------- HELPER FUNCTIONS ---------------
+
+def _generate_highlights(parcel: Dict[str, Any], prefs: Dict[str, Any]) -> List[str]:
+    """Generate highlight strings explaining why this parcel matches preferences."""
+    highlights = []
+
+    # Cisza (quietness)
+    quietness = parcel.get("quietness_score", 0)
+    if quietness and quietness >= 85:
+        highlights.append(f"Cisza: {int(quietness)}/100")
+    elif prefs.get("quietness_categories") and quietness and quietness >= 75:
+        highlights.append(f"Cisza: {int(quietness)}/100")
+
+    # Natura (nature)
+    nature = parcel.get("nature_score", 0)
+    if nature and nature >= 70:
+        highlights.append(f"Natura: {int(nature)}/100")
+    elif prefs.get("nature_categories") and nature and nature >= 60:
+        highlights.append(f"Natura: {int(nature)}/100")
+
+    # Bliskość lasu
+    dist_forest = parcel.get("dist_to_forest")
+    if dist_forest is not None and dist_forest < 300:
+        highlights.append(f"Las: {int(dist_forest)}m")
+    elif prefs.get("max_dist_to_forest_m") and dist_forest and dist_forest <= prefs["max_dist_to_forest_m"]:
+        highlights.append(f"Las: {int(dist_forest)}m")
+
+    # Bliskość wody
+    dist_water = parcel.get("dist_to_water")
+    if prefs.get("max_dist_to_water_m") and dist_water and dist_water <= prefs["max_dist_to_water_m"]:
+        highlights.append(f"Woda: {int(dist_water)}m")
+
+    # Dostępność (accessibility)
+    accessibility = parcel.get("accessibility_score", 0)
+    if accessibility and accessibility >= 80:
+        highlights.append(f"Dostępność: {int(accessibility)}/100")
+    elif prefs.get("accessibility_categories") and accessibility and accessibility >= 70:
+        highlights.append(f"Dostępność: {int(accessibility)}/100")
+
+    # Bliskość szkoły
+    dist_school = parcel.get("dist_to_school")
+    if prefs.get("max_dist_to_school_m") and dist_school and dist_school <= prefs["max_dist_to_school_m"]:
+        highlights.append(f"Szkoła: {int(dist_school)}m")
+
+    # Bliskość sklepu
+    dist_shop = parcel.get("dist_to_shop")
+    if prefs.get("max_dist_to_shop_m") and dist_shop and dist_shop <= prefs["max_dist_to_shop_m"]:
+        highlights.append(f"Sklep: {int(dist_shop)}m")
+
+    # Dostęp do drogi
+    if prefs.get("has_road_access") and parcel.get("has_road_access"):
+        if len(highlights) < 3:  # Only if we have room
+            highlights.append("Dostęp do drogi")
+
+    # MPZP
+    if parcel.get("has_mpzp"):
+        symbol = parcel.get("mpzp_symbol", "")
+        if symbol:
+            highlights.append(f"MPZP: {symbol}")
+        else:
+            highlights.append("Ma MPZP")
+
+    # If user prioritized quietness via weight and parcel is quiet (legacy support)
+    if prefs.get("quietness_weight", 0) >= 0.5 and quietness and quietness >= 80:
+        if not any("Cisza" in h for h in highlights):
+            highlights.append("Cicha okolica")
+
+    # If user prioritized nature via weight and parcel is green (legacy support)
+    if prefs.get("nature_weight", 0) >= 0.5 and nature and nature >= 70:
+        if not any("Natura" in h for h in highlights):
+            highlights.append("Blisko natury")
+
+    return highlights[:4]  # Max 4 highlights
+
+
+def _generate_explanation(parcel: Dict[str, Any]) -> str:
+    """Generate a short explanation for the parcel."""
+    parts = []
+
+    miejscowosc = parcel.get("miejscowosc")
+    gmina = parcel.get("gmina")
+    area = parcel.get("area_m2")
+
+    if miejscowosc:
+        parts.append(miejscowosc)
+    elif gmina:
+        parts.append(gmina)
+
+    if area:
+        parts.append(f"{int(area):,} m²".replace(",", " "))
+
+    return ", ".join(parts)
 
 
 # --------------- SEARCH IMPLEMENTATIONS ---------------
@@ -518,24 +803,58 @@ async def _execute_search(params: Dict[str, Any]) -> Dict[str, Any]:
     prefs = state.approved_search_preferences
     limit = params.get("limit", 10)
 
-    # Build search preferences
+    # Build comprehensive search preferences using all available fields
     search_prefs = SearchPreferences(
+        # Location (agent should explicitly set gmina if user specified one)
         gmina=prefs.get("gmina"),
+        miejscowosc=prefs.get("miejscowosc"),
+        powiat=prefs.get("powiat"),
+
+        # Area
         min_area=prefs.get("min_area_m2"),
         max_area=prefs.get("max_area_m2"),
+        area_category=prefs.get("area_category"),
+
+        # Character & Environment
+        charakter_terenu=prefs.get("charakter_terenu"),
+        quietness_categories=prefs.get("quietness_categories"),
+        building_density=prefs.get("building_density"),
+        min_dist_to_industrial_m=prefs.get("min_dist_to_industrial_m"),
+
+        # Nature
+        nature_categories=prefs.get("nature_categories"),
+        max_dist_to_forest_m=prefs.get("max_dist_to_forest_m"),
+        max_dist_to_water_m=prefs.get("max_dist_to_water_m"),
+        min_forest_pct_500m=prefs.get("min_forest_pct_500m"),
+
+        # Accessibility
+        accessibility_categories=prefs.get("accessibility_categories"),
+        max_dist_to_school_m=prefs.get("max_dist_to_school_m"),
+        max_dist_to_shop_m=prefs.get("max_dist_to_shop_m"),
+        max_dist_to_bus_stop_m=prefs.get("max_dist_to_bus_stop_m"),
+        has_road_access=prefs.get("has_road_access"),
+
+        # MPZP
         has_mpzp=prefs.get("requires_mpzp"),
         mpzp_budowlane=prefs.get("mpzp_buildable"),
+        mpzp_symbols=prefs.get("mpzp_symbols"),
+
+        # Sorting
+        sort_by=prefs.get("sort_by", "quietness_score"),
+
+        # Legacy weights (for backwards compatibility)
         quietness_weight=prefs.get("quietness_weight", 0.5),
         nature_weight=prefs.get("nature_weight", 0.3),
         accessibility_weight=prefs.get("accessibility_weight", 0.2),
     )
 
-    # Execute hybrid search
+    # Execute hybrid search (Graph as PRIMARY)
     results = await hybrid_search.search(search_prefs, limit=limit, include_details=True)
 
-    # Store results for critic pattern
-    state.current_search_results = [
-        {
+    # Store results for critic pattern, including highlights and explanations
+    state.current_search_results = []
+    for r in results:
+        parcel_dict = {
             "id": r.parcel_id,
             "gmina": r.gmina,
             "miejscowosc": r.miejscowosc,
@@ -545,11 +864,21 @@ async def _execute_search(params: Dict[str, Any]) -> Dict[str, Any]:
             "accessibility_score": r.accessibility_score,
             "has_mpzp": r.has_mpzp,
             "mpzp_symbol": r.mpzp_symbol,
-            "lat": r.centroid_lat,
-            "lon": r.centroid_lon,
+            "centroid_lat": r.centroid_lat,
+            "centroid_lon": r.centroid_lon,
+            # New fields from graph search
+            "dist_to_forest": r.dist_to_forest,
+            "dist_to_water": r.dist_to_water,
+            "dist_to_school": r.dist_to_school,
+            "dist_to_shop": r.dist_to_shop,
+            "pct_forest_500m": r.pct_forest_500m,
+            "has_road_access": r.has_road_access,
         }
-        for r in results
-    ]
+        # Add highlights and explanation for the reveal card
+        parcel_dict["highlights"] = _generate_highlights(parcel_dict, prefs)
+        parcel_dict["explanation"] = _generate_explanation(parcel_dict)
+        state.current_search_results.append(parcel_dict)
+
     state.search_iteration += 1
 
     return {
@@ -633,21 +962,67 @@ async def _refine_search(params: Dict[str, Any]) -> Dict[str, Any]:
     prefs = state.approved_search_preferences
 
     # Apply adjustment based on description
-    # This is simplified - in production, could use LLM to parse adjustment
     adjustment_lower = adjustment.lower()
 
+    min_area = prefs.get("min_area_m2", 500)
+    max_area = prefs.get("max_area_m2", 3000)
+
+    # Area adjustments
     if "większ" in adjustment_lower or "duż" in adjustment_lower:
-        prefs["min_area_m2"] = prefs.get("min_area_m2", 500) * 1.5
+        new_min = min_area * 1.5
+        prefs["min_area_m2"] = new_min
+        if new_min >= max_area:
+            prefs["max_area_m2"] = new_min * 1.5
+
     if "mniejsz" in adjustment_lower or "mał" in adjustment_lower:
-        prefs["max_area_m2"] = prefs.get("max_area_m2", 3000) * 0.7
-    if "cich" in adjustment_lower:
-        prefs["quietness_weight"] = min(1.0, prefs.get("quietness_weight", 0.5) + 0.2)
-    if "natur" in adjustment_lower or "las" in adjustment_lower:
-        prefs["nature_weight"] = min(1.0, prefs.get("nature_weight", 0.3) + 0.2)
+        new_max = max_area * 0.7
+        prefs["max_area_m2"] = new_max
+        if min_area >= new_max:
+            prefs["min_area_m2"] = new_max * 0.5
+
+    # Quietness adjustments - use categories when available
+    if "cich" in adjustment_lower or "spok" in adjustment_lower:
+        # If we have quietness_categories, make them stricter
+        if prefs.get("quietness_categories"):
+            prefs["quietness_categories"] = ["bardzo_cicha", "cicha"]
+        else:
+            # Set categories for the first time
+            prefs["quietness_categories"] = ["bardzo_cicha", "cicha"]
+        # Also reduce building density
+        prefs["building_density"] = ["rzadka", "bardzo_rzadka"]
+
+    # Nature adjustments
+    if "natur" in adjustment_lower or "las" in adjustment_lower or "zielen" in adjustment_lower:
+        if prefs.get("nature_categories"):
+            prefs["nature_categories"] = ["bardzo_zielona", "zielona"]
+        else:
+            prefs["nature_categories"] = ["bardzo_zielona", "zielona"]
+        # Also add forest proximity constraint
+        if not prefs.get("max_dist_to_forest_m"):
+            prefs["max_dist_to_forest_m"] = 500
+
+    # Accessibility adjustments
+    if "dojazd" in adjustment_lower or "sklep" in adjustment_lower or "szkol" in adjustment_lower:
+        prefs["accessibility_categories"] = ["doskonały", "dobry"]
+
+    # Industrial distance (for quieter areas)
+    if "przemysł" in adjustment_lower or "fabryk" in adjustment_lower or "hałas" in adjustment_lower:
+        prefs["min_dist_to_industrial_m"] = (prefs.get("min_dist_to_industrial_m") or 500) + 500
+
+    # MPZP adjustments
+    if "mpzp" in adjustment_lower or "plan" in adjustment_lower:
+        prefs["requires_mpzp"] = True
+
+    # Ensure min <= max (safety check)
+    if prefs.get("min_area_m2", 0) > prefs.get("max_area_m2", 10000):
+        prefs["min_area_m2"], prefs["max_area_m2"] = prefs["max_area_m2"], prefs["min_area_m2"]
 
     # Clear feedback, increment iteration
     state.search_feedback = None
     state.approved_search_preferences = prefs
+
+    logger.info(f"Refined preferences: area={prefs.get('min_area_m2')}-{prefs.get('max_area_m2')}, "
+               f"quietness={prefs.get('quietness_categories')}, nature={prefs.get('nature_categories')}")
 
     # Re-run search
     return await _execute_search({"limit": 10})

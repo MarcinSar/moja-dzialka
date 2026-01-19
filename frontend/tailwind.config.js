@@ -71,6 +71,7 @@ export default {
       backgroundImage: {
         'contour-pattern': `url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M10 50 Q 25 30 50 50 T 90 50' fill='none' stroke='%232e3446' stroke-width='0.5'/%3E%3Cpath d='M10 70 Q 25 50 50 70 T 90 70' fill='none' stroke='%232e3446' stroke-width='0.5'/%3E%3Cpath d='M10 30 Q 25 10 50 30 T 90 30' fill='none' stroke='%232e3446' stroke-width='0.5'/%3E%3C/svg%3E")`,
         'grid-pattern': `url("data:image/svg+xml,%3Csvg width='40' height='40' viewBox='0 0 40 40' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h40v40H0z' fill='none'/%3E%3Cpath d='M0 40V0h1v40zm40 0V0h-1v40zM0 0h40v1H0zm0 40h40v-1H0z' fill='%232e3446' fill-opacity='0.3'/%3E%3C/svg%3E")`,
+        'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
       },
       boxShadow: {
         'glow-amber': '0 0 20px rgba(251, 191, 36, 0.15)',
