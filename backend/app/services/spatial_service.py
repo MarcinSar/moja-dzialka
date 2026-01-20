@@ -461,6 +461,26 @@ class SpatialService:
             logger.error(f"Get gmina statistics error: {e}")
             return None
 
+    async def get_miejscowosci(self) -> List[str]:
+        """Get list of all miejscowości."""
+        query = "SELECT DISTINCT miejscowosc FROM parcels WHERE miejscowosc IS NOT NULL ORDER BY miejscowosc"
+        try:
+            results = await postgis.execute(query)
+            return [row[0] for row in results]
+        except Exception as e:
+            logger.error(f"Get miejscowosci error: {e}")
+            return []
+
+    async def get_powiaty(self) -> List[str]:
+        """Get list of all powiaty."""
+        query = "SELECT DISTINCT powiat FROM parcels WHERE powiat IS NOT NULL ORDER BY powiat"
+        try:
+            results = await postgis.execute(query)
+            return [row[0] for row in results]
+        except Exception as e:
+            logger.error(f"Get powiaty error: {e}")
+            return []
+
     async def generate_geojson(
         self,
         parcel_ids: List[str],

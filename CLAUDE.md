@@ -202,6 +202,47 @@ User klika "Pokaż teren 3D" → Celery pobiera LAZ z GUGiK → PotreeConverter
 - `tools.py` - 25+ new input fields, improved highlights generation
 - `orchestrator.py` - Rich data context in SYSTEM_PROMPT
 
+### NOWE (2026-01-19): Pełne wykorzystanie wszystkich baz danych
+
+**Problem:** Agent miał dostęp tylko do części możliwości Neo4j, PostGIS był słabo wykorzystywany, Milvus tylko przez `find_similar_parcels`.
+
+**Rozwiązanie - 21 narzędzi agenta (było 15):**
+
+| Baza | Nowe narzędzia | Opis |
+|------|----------------|------|
+| **Neo4j** | `explore_administrative_hierarchy` | Nawigacja: województwo → powiat → gmina → miejscowość |
+| **Neo4j** | `get_parcel_neighborhood` | Pełny kontekst przestrzenny działki |
+| **Neo4j** | `get_area_statistics` | Statystyki kategorii dla gminy/powiatu |
+| **Neo4j** | `find_by_mpzp_symbol` | Szybkie wyszukiwanie po symbolu MPZP |
+| **PostGIS** | `search_around_point` | Wyszukiwanie w promieniu od współrzędnych |
+| **PostGIS** | `search_in_bbox` | Wyszukiwanie w prostokącie (dla mapy) |
+| **PostGIS** | `lat/lon/radius_m` w preferencjach | Wyszukiwanie przestrzenne w hybrydowym search |
+| **Hybrid** | `max_dist_to_hospital_m` | Nowy parametr dostępności medycznej |
+
+**Nowe metody w graph_service.py:**
+- `get_children_in_hierarchy()` - hierarchia administracyjna
+- `get_area_category_stats()` - rozkład kategorii w obszarze
+- `get_parcel_neighborhood()` - pełny kontekst działki
+- `get_all_powiaty()` - lista powiatów
+
+**Architektura wykorzystania baz:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        AGENT (21 tools)                          │
+├─────────────────────────────────────────────────────────────────┤
+│ Neo4j (Graf)          │ PostGIS (Przestrzeń)  │ Milvus (Wektory)│
+│ ─────────────────────-│───────────────────────│─────────────────│
+│ • execute_search      │ • search_around_point │ • find_similar  │
+│ • explore_hierarchy   │ • search_in_bbox      │   _parcels      │
+│ • get_neighborhood    │ • lat/lon w execute_  │                 │
+│ • get_area_statistics │   search (hybrid)     │                 │
+│ • find_by_mpzp_symbol │ • generate_map_data   │                 │
+│ • get_parcel_details  │                       │                 │
+│ • get_gmina_info      │                       │                 │
+│ • list_gminy          │                       │                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ### NOWE (2026-01-19): Parcel Reveal Flow
 
 **Problem:** Wcześniej wyniki wyszukiwania powodowały skok do 3-panelowego layoutu (brzydkie przejście).
@@ -249,7 +290,7 @@ User klika "Pokaż teren 3D" → Celery pobiera LAZ z GUGiK → PotreeConverter
 │                      AGENT LAYER (FastAPI)                           │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
 │  │ ParcelAgent │  │ Tools       │  │ EventStream │                  │
-│  │(Haiku 4.5)  │  │ (15 tools)  │  │ (WebSocket) │                  │
+│  │(Haiku 4.5)  │  │ (21 tools)  │  │ (WebSocket) │                  │
 │  └─────────────┘  └─────────────┘  └─────────────┘                  │
 │                           │                                          │
 │  Patterns: Human-in-the-Loop | Guard | Critic | Few-Shot            │
@@ -418,7 +459,7 @@ results = collection.search(
 
 ---
 
-## Agent Tools (15 narzędzi)
+## Agent Tools (21 narzędzi)
 
 ### Human-in-the-Loop: Preferencje
 
@@ -433,19 +474,36 @@ results = collection.search(
 | Kategoria | Pola |
 |-----------|------|
 | **Lokalizacja** | `gmina`, `miejscowosc`, `powiat`, `charakter_terenu` (wiejski/podmiejski/miejski/leśny/mieszany) |
+| **Przestrzenne** | `lat`, `lon`, `radius_m` (wyszukiwanie w promieniu od punktu) |
 | **Powierzchnia** | `min_area`, `max_area`, `area_category` (mala/srednia/duza/bardzo_duza) |
 | **Cisza** | `quietness_categories` (bardzo_cicha/cicha/umiarkowana/głośna), `max_dist_to_industrial_m` |
 | **Natura** | `nature_categories`, `max_dist_to_forest_m`, `max_dist_to_water_m`, `min_forest_pct_500m` |
 | **Gęstość** | `building_density` (bardzo_gesta/gesta/umiarkowana/rzadka/bardzo_rzadka) |
-| **Dostępność** | `accessibility_categories`, `max_dist_to_school_m`, `max_dist_to_shop_m`, `max_dist_to_bus_stop_m`, `has_road_access` |
+| **Dostępność** | `accessibility_categories`, `max_dist_to_school_m`, `max_dist_to_shop_m`, `max_dist_to_bus_stop_m`, `max_dist_to_hospital_m`, `has_road_access` |
 | **MPZP** | `has_mpzp`, `mpzp_budowlane`, `mpzp_symbols` (MN/MN_U/MW/U/R/ZL...) |
 
-### Wyszukiwanie (Guard Pattern)
+### Wyszukiwanie hybrydowe (Guard Pattern)
 
 | Narzędzie | Opis |
 |-----------|------|
-| `execute_search` | Wyszukaj działki (wymaga approved!) |
-| `find_similar_parcels` | Znajdź podobne do wskazanej |
+| `execute_search` | Wyszukaj działki (wymaga approved!) - Graph + Spatial + Vector |
+| `find_similar_parcels` | Znajdź podobne do wskazanej (Milvus vector search) |
+
+### Wyszukiwanie przestrzenne (PostGIS)
+
+| Narzędzie | Opis |
+|-----------|------|
+| `search_around_point` | ✨ Wyszukaj działki w promieniu od współrzędnych |
+| `search_in_bbox` | ✨ Wyszukaj działki w prostokącie (dla widoku mapy) |
+
+### Eksploracja grafu (Neo4j)
+
+| Narzędzie | Opis |
+|-----------|------|
+| `explore_administrative_hierarchy` | ✨ Nawiguj: województwo → powiat → gmina → miejscowość |
+| `get_parcel_neighborhood` | ✨ Pełny kontekst przestrzenny działki (POI, natura, charakter) |
+| `get_area_statistics` | ✨ Statystyki kategorii dla gminy/powiatu |
+| `find_by_mpzp_symbol` | ✨ Szybkie wyszukiwanie po symbolu MPZP |
 
 ### Critic Pattern: Ulepszanie
 
@@ -468,7 +526,7 @@ results = collection.search(
 
 | Narzędzie | Opis |
 |-----------|------|
-| `generate_map_data` | GeoJSON do wyświetlenia |
+| `generate_map_data` | GeoJSON do wyświetlenia
 
 ---
 
@@ -657,7 +715,7 @@ moja-dzialka/
 │       │   └── potree_converter.py    # PotreeConverter wrapper
 │       └── agent/
 │           ├── __init__.py
-│           ├── tools.py               # 15 agent tools + state + highlights
+│           ├── tools.py               # 21 agent tools + state + highlights
 │           └── orchestrator.py        # ParcelAgent (Haiku 4.5) + streaming
 ├── frontend/
 │   ├── index.html                     # + Potree/Three.js CDN scripts
@@ -960,4 +1018,4 @@ docker volume ls | grep moja-dzialka
 
 ---
 
-*Ostatnia aktualizacja: 2026-01-19 (Potree 3D LiDAR integration + Model change to Haiku 4.5)*
+*Ostatnia aktualizacja: 2026-01-19 (Pełne wykorzystanie Neo4j + PostGIS + Milvus: 21 narzędzi agenta)*

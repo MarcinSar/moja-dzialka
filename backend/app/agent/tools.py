@@ -22,6 +22,7 @@ from app.services import (
     hybrid_search,
     SearchPreferences,
     SpatialSearchParams,
+    BBoxSearchParams,
 )
 
 
@@ -114,6 +115,21 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                     "type": "string",
                     "description": "Powiat (gdański, kartuski, Gdańsk)"
                 },
+
+                # === LOKALIZACJA PRZESTRZENNA (PostGIS) ===
+                "lat": {
+                    "type": "number",
+                    "description": "Szerokość geograficzna punktu centralnego (WGS84). Używaj razem z lon i radius_m dla wyszukiwania w promieniu od punktu."
+                },
+                "lon": {
+                    "type": "number",
+                    "description": "Długość geograficzna punktu centralnego (WGS84). Używaj razem z lat i radius_m."
+                },
+                "radius_m": {
+                    "type": "number",
+                    "description": "Promień wyszukiwania w metrach od punktu (lat, lon). Domyślnie 5000m. Max 20000m."
+                },
+
                 "charakter_terenu": {
                     "type": "array",
                     "items": {"type": "string", "enum": ["wiejski", "podmiejski", "miejski", "leśny", "mieszany"]},
@@ -188,6 +204,10 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                     "type": "integer",
                     "description": "Max. odległość do przystanku w metrach"
                 },
+                "max_dist_to_hospital_m": {
+                    "type": "integer",
+                    "description": "Max. odległość do szpitala/przychodni w metrach"
+                },
                 "has_road_access": {
                     "type": "boolean",
                     "description": "Czy działka musi mieć dostęp do drogi publicznej"
@@ -259,10 +279,11 @@ Użyj gdy użytkownik chce zmienić tylko jedną rzecz w propozycji.
                     "type": "string",
                     "enum": [
                         "gmina", "miejscowosc", "powiat", "charakter_terenu",
+                        "lat", "lon", "radius_m",
                         "min_area_m2", "max_area_m2", "area_category",
                         "quietness_categories", "building_density", "min_dist_to_industrial_m",
                         "nature_categories", "max_dist_to_forest_m", "max_dist_to_water_m", "min_forest_pct_500m",
-                        "accessibility_categories", "max_dist_to_school_m", "max_dist_to_shop_m", "max_dist_to_bus_stop_m", "has_road_access",
+                        "accessibility_categories", "max_dist_to_school_m", "max_dist_to_shop_m", "max_dist_to_bus_stop_m", "max_dist_to_hospital_m", "has_road_access",
                         "requires_mpzp", "mpzp_buildable", "mpzp_symbols", "sort_by",
                         "quietness_weight", "nature_weight", "accessibility_weight"
                     ],
@@ -437,6 +458,210 @@ MN = mieszkaniowa jednorodzinna, U = usługowa, ZL = leśna, itp.
         }
     },
 
+    # =============== NAVIGATION & EXPLORATION TOOLS ===============
+    {
+        "name": "explore_administrative_hierarchy",
+        "description": """
+Przeglądaj strukturę administracyjną: województwo → powiat → gmina → miejscowość.
+
+KIEDY UŻYWAĆ:
+- User pyta "jakie powiaty są w pomorskim?" → level="wojewodztwo"
+- User pyta "jakie gminy są w powiecie gdańskim?" → level="powiat", parent_name="gdański"
+- User pyta "jakie wsie są w gminie Żukowo?" → level="gmina", parent_name="Żukowo"
+
+Zwraca listę jednostek z liczbą działek.
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "string",
+                    "enum": ["wojewodztwo", "powiat", "gmina"],
+                    "description": "Na jakim poziomie szukać: wojewodztwo → powiaty, powiat → gminy, gmina → miejscowości"
+                },
+                "parent_name": {
+                    "type": "string",
+                    "description": "Nazwa nadrzędnej jednostki (wymagana dla powiat i gmina)"
+                }
+            },
+            "required": ["level"]
+        }
+    },
+    {
+        "name": "get_parcel_neighborhood",
+        "description": """
+Pokaż PEŁNY kontekst przestrzenny działki - wszystko co jest w pobliżu.
+
+Zwraca:
+- Odległości do: szkoły, sklepu, szpitala, przystanku, przemysłu
+- Odległości do: lasu, wody
+- Procent lasu/wody w promieniu 500m
+- Liczba budynków w 500m
+- Charakter terenu, kategorie ciszy/natury/dostępności
+- MPZP (symbol, nazwa, czy budowlane)
+
+UŻYWAJ gdy user wybrał działkę i pyta "co jest w pobliżu?" lub "opowiedz o tej działce".
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_id": {
+                    "type": "string",
+                    "description": "ID działki"
+                }
+            },
+            "required": ["parcel_id"]
+        }
+    },
+    {
+        "name": "get_area_statistics",
+        "description": """
+Pokaż statystyki dla gminy lub powiatu - rozkład działek po kategoriach.
+
+Zwraca:
+- Łączna liczba działek
+- % z MPZP
+- % z dostępem do drogi
+- Rozkład po kategoriach ciszy (ile bardzo_cichych, cichych, itd.)
+- Rozkład po kategoriach natury
+- Rozkład po charakterze terenu
+
+UŻYWAJ gdy user pyta "ile jest działek w X?" lub "jakie działki są w gminie Y?".
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "gmina": {
+                    "type": "string",
+                    "description": "Nazwa gminy (opcjonalna)"
+                },
+                "powiat": {
+                    "type": "string",
+                    "description": "Nazwa powiatu (opcjonalna, używaj gdy nie podano gminy)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "find_by_mpzp_symbol",
+        "description": """
+Szybkie wyszukiwanie działek z konkretnym symbolem MPZP.
+
+Symbole budowlane: MN, MN/U, MW, MW/U, U, U/MN
+Symbole niebudowlane: R (rolne), ZL (leśne), ZP (zieleń), ZZ (zagrożenie), W (wody)
+
+UŻYWAJ gdy user mówi "szukam działki MN" lub "pokaż działki z planem pod zabudowę jednorodzinną".
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Symbol MPZP (np. MN, MN/U, U, R, ZL)"
+                },
+                "gmina": {
+                    "type": "string",
+                    "description": "Opcjonalna gmina do filtrowania"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maksymalna liczba wyników (domyślnie 20)"
+                }
+            },
+            "required": ["symbol"]
+        }
+    },
+
+    # =============== SPATIAL TOOLS (PostGIS) ===============
+    {
+        "name": "search_around_point",
+        "description": """
+SZYBKIE wyszukiwanie przestrzenne - znajdź działki w promieniu od punktu.
+
+KIEDY UŻYWAĆ:
+- User podał konkretne współrzędne lub adres
+- User wskazał punkt na mapie
+- Potrzebujesz szybkiego wyszukiwania bez pełnego flow propose/approve
+
+Używa PostGIS do efektywnego wyszukiwania przestrzennego.
+Zwraca działki posortowane wg odległości od punktu.
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "lat": {
+                    "type": "number",
+                    "description": "Szerokość geograficzna (WGS84)"
+                },
+                "lon": {
+                    "type": "number",
+                    "description": "Długość geograficzna (WGS84)"
+                },
+                "radius_m": {
+                    "type": "number",
+                    "description": "Promień wyszukiwania w metrach (domyślnie 5000, max 20000)"
+                },
+                "min_area": {
+                    "type": "number",
+                    "description": "Minimalna powierzchnia w m²"
+                },
+                "max_area": {
+                    "type": "number",
+                    "description": "Maksymalna powierzchnia w m²"
+                },
+                "has_mpzp": {
+                    "type": "boolean",
+                    "description": "Czy wymagać MPZP"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maksymalna liczba wyników (domyślnie 20)"
+                }
+            },
+            "required": ["lat", "lon"]
+        }
+    },
+    {
+        "name": "search_in_bbox",
+        "description": """
+Wyszukaj działki w prostokątnym obszarze (bounding box).
+
+KIEDY UŻYWAĆ:
+- User zaznaczył obszar na mapie
+- Potrzebujesz działek z określonego regionu (nie okręgu)
+- Eksplorujesz konkretny kwadrat mapy
+
+Przydatne do eksploracji mapy - zwraca działki z widocznego obszaru.
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "min_lat": {
+                    "type": "number",
+                    "description": "Minimalna szerokość geograficzna (południe)"
+                },
+                "min_lon": {
+                    "type": "number",
+                    "description": "Minimalna długość geograficzna (zachód)"
+                },
+                "max_lat": {
+                    "type": "number",
+                    "description": "Maksymalna szerokość geograficzna (północ)"
+                },
+                "max_lon": {
+                    "type": "number",
+                    "description": "Maksymalna długość geograficzna (wschód)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maksymalna liczba wyników (domyślnie 50)"
+                }
+            },
+            "required": ["min_lat", "min_lon", "max_lat", "max_lon"]
+        }
+    },
+
     # =============== MAP TOOLS ===============
     {
         "name": "generate_map_data",
@@ -501,6 +726,22 @@ async def execute_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]
         elif tool_name == "get_mpzp_symbols":
             return await _get_mpzp_symbols(params)
 
+        # Navigation & Exploration tools
+        elif tool_name == "explore_administrative_hierarchy":
+            return await _explore_administrative_hierarchy(params)
+        elif tool_name == "get_parcel_neighborhood":
+            return await _get_parcel_neighborhood(params)
+        elif tool_name == "get_area_statistics":
+            return await _get_area_statistics(params)
+        elif tool_name == "find_by_mpzp_symbol":
+            return await _find_by_mpzp_symbol(params)
+
+        # Spatial tools (PostGIS)
+        elif tool_name == "search_around_point":
+            return await _search_around_point(params)
+        elif tool_name == "search_in_bbox":
+            return await _search_in_bbox(params)
+
         # Map tools
         elif tool_name == "generate_map_data":
             return await _generate_map_data(params)
@@ -520,13 +761,73 @@ async def _propose_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
     state = get_state()
 
     # Build comprehensive preferences from all available parameters
+    location_desc = params.get("location_description", "województwo pomorskie")
+    gmina_param = params.get("gmina")
+
+    # Smart location parsing: miejscowość → gmina → powiat (most specific to least)
+    # This handles cases like:
+    #   "Osowa" → miejscowosc=Osowa
+    #   "Gdynia" or "M. Gdynia" → gmina=M. Gdynia
+    #   "powiat gdański" → powiat=gdański
+    miejscowosc_param = params.get("miejscowosc")
+    powiat_param = params.get("powiat")
+
+    if location_desc and not (gmina_param and miejscowosc_param and powiat_param):
+        from app.services.graph_service import graph_service
+        from app.services.spatial_service import spatial_service
+        try:
+            # Clean the location string
+            clean_loc = location_desc.lower()
+            clean_loc = clean_loc.replace("okolice ", "").replace("gmina ", "").replace("powiat ", "")
+            clean_loc = clean_loc.replace("miasto ", "").replace("m. ", "")
+            clean_loc = clean_loc.strip()
+
+            # 1. Try miejscowość first (most specific)
+            if not miejscowosc_param:
+                miejscowosci = await spatial_service.get_miejscowosci()
+                for m in miejscowosci:
+                    if m.lower() == clean_loc:
+                        miejscowosc_param = m
+                        break
+
+            # 2. Try gmina
+            if not gmina_param:
+                gminy = await graph_service.get_gminy()
+                gminy_names = [g.name for g in gminy]
+                # Direct match
+                if location_desc in gminy_names:
+                    gmina_param = location_desc
+                else:
+                    for gmina_name in gminy_names:
+                        clean_gmina = gmina_name.lower().replace("m. ", "")
+                        if clean_loc == clean_gmina or clean_gmina == clean_loc:
+                            gmina_param = gmina_name
+                            break
+
+            # 3. Try powiat (most general)
+            if not powiat_param and not gmina_param and not miejscowosc_param:
+                powiaty = await spatial_service.get_powiaty()
+                for p in powiaty:
+                    clean_powiat = p.lower().replace("m. ", "")
+                    if clean_loc == clean_powiat or clean_powiat in clean_loc:
+                        powiat_param = p
+                        break
+
+        except Exception as e:
+            pass  # If service not available, continue without location filters
+
     preferences = {
         # Location
-        "location_description": params.get("location_description", "województwo pomorskie"),
-        "gmina": params.get("gmina"),
-        "miejscowosc": params.get("miejscowosc"),
-        "powiat": params.get("powiat"),
+        "location_description": location_desc,
+        "gmina": gmina_param,
+        "miejscowosc": miejscowosc_param,
+        "powiat": powiat_param,
         "charakter_terenu": params.get("charakter_terenu"),
+
+        # Spatial search (PostGIS)
+        "lat": params.get("lat"),
+        "lon": params.get("lon"),
+        "radius_m": params.get("radius_m", 5000),
 
         # Area
         "min_area_m2": params.get("min_area_m2", 500),
@@ -549,6 +850,7 @@ async def _propose_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
         "max_dist_to_school_m": params.get("max_dist_to_school_m"),
         "max_dist_to_shop_m": params.get("max_dist_to_shop_m"),
         "max_dist_to_bus_stop_m": params.get("max_dist_to_bus_stop_m"),
+        "max_dist_to_hospital_m": params.get("max_dist_to_hospital_m"),
         "has_road_access": params.get("has_road_access"),
 
         # MPZP
@@ -578,6 +880,11 @@ async def _propose_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
     if preferences["charakter_terenu"]:
         summary["charakter"] = ", ".join(preferences["charakter_terenu"])
 
+    # Spatial search info
+    if preferences.get("lat") and preferences.get("lon"):
+        radius = preferences.get("radius_m", 5000)
+        summary["wyszukiwanie_przestrzenne"] = f"w promieniu {radius/1000:.1f}km od punktu ({preferences['lat']:.4f}, {preferences['lon']:.4f})"
+
     summary["powierzchnia"] = f"{preferences['min_area_m2']}-{preferences['max_area_m2']} m²"
 
     # Environment preferences
@@ -603,6 +910,8 @@ async def _propose_search_preferences(params: Dict[str, Any]) -> Dict[str, Any]:
         dist_constraints.append(f"szkoła do {preferences['max_dist_to_school_m']}m")
     if preferences["max_dist_to_shop_m"]:
         dist_constraints.append(f"sklep do {preferences['max_dist_to_shop_m']}m")
+    if preferences.get("max_dist_to_hospital_m"):
+        dist_constraints.append(f"szpital do {preferences['max_dist_to_hospital_m']}m")
     if dist_constraints:
         summary["ograniczenia_odległości"] = dist_constraints
 
@@ -810,6 +1119,11 @@ async def _execute_search(params: Dict[str, Any]) -> Dict[str, Any]:
         miejscowosc=prefs.get("miejscowosc"),
         powiat=prefs.get("powiat"),
 
+        # Spatial search (PostGIS) - if lat/lon provided, use radius search
+        lat=prefs.get("lat"),
+        lon=prefs.get("lon"),
+        radius_m=prefs.get("radius_m", 5000),
+
         # Area
         min_area=prefs.get("min_area_m2"),
         max_area=prefs.get("max_area_m2"),
@@ -832,6 +1146,7 @@ async def _execute_search(params: Dict[str, Any]) -> Dict[str, Any]:
         max_dist_to_school_m=prefs.get("max_dist_to_school_m"),
         max_dist_to_shop_m=prefs.get("max_dist_to_shop_m"),
         max_dist_to_bus_stop_m=prefs.get("max_dist_to_bus_stop_m"),
+        max_dist_to_hospital_m=prefs.get("max_dist_to_hospital_m"),
         has_road_access=prefs.get("has_road_access"),
 
         # MPZP
@@ -1090,6 +1405,330 @@ async def _get_mpzp_symbols(params: Dict[str, Any]) -> Dict[str, Any]:
             }
             for s in symbols
         ]
+    }
+
+
+# --------------- NAVIGATION & EXPLORATION IMPLEMENTATIONS ---------------
+
+async def _explore_administrative_hierarchy(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Explore administrative hierarchy."""
+    level = params["level"]
+    parent_name = params.get("parent_name")
+
+    results = await graph_service.get_children_in_hierarchy(level, parent_name)
+
+    if not results:
+        if level == "powiat" and not parent_name:
+            return {"error": "Podaj nazwę powiatu (parent_name) aby zobaczyć gminy"}
+        if level == "gmina" and not parent_name:
+            return {"error": "Podaj nazwę gminy (parent_name) aby zobaczyć miejscowości"}
+        return {"error": f"Nie znaleziono danych dla level={level}, parent={parent_name}"}
+
+    # Generate human-readable summary
+    if level == "wojewodztwo":
+        summary = f"W województwie pomorskim jest {len(results)} powiatów"
+        items = [
+            f"{r['name']} ({r.get('gminy_count', 0)} gmin, {r.get('parcel_count', 0):,} działek)"
+            for r in results
+        ]
+    elif level == "powiat":
+        summary = f"W powiecie {parent_name} jest {len(results)} gmin"
+        items = [
+            f"{r['name']} ({r.get('parcel_count', 0):,} działek)"
+            for r in results
+        ]
+    else:  # gmina
+        summary = f"W gminie {parent_name} jest {len(results)} miejscowości"
+        items = [
+            f"{r['name']} ({r.get('rodzaj', 'wieś')}, {r.get('parcel_count', 0):,} działek)"
+            for r in results[:20]  # Limit to 20 for readability
+        ]
+        if len(results) > 20:
+            items.append(f"... i {len(results) - 20} więcej")
+
+    return {
+        "level": level,
+        "parent": parent_name,
+        "count": len(results),
+        "summary": summary,
+        "items": items,
+        "raw_data": results[:30],  # Limit raw data to 30 items
+    }
+
+
+async def _get_parcel_neighborhood(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get detailed neighborhood context for a parcel."""
+    parcel_id = params["parcel_id"]
+
+    result = await graph_service.get_parcel_neighborhood(parcel_id)
+
+    if "error" in result:
+        return result
+
+    # Format distances for human readability
+    poi_summary = []
+    if result.get("dist_to_school"):
+        poi_summary.append(f"Szkoła: {int(result['dist_to_school'])}m")
+    if result.get("dist_to_shop"):
+        poi_summary.append(f"Sklep: {int(result['dist_to_shop'])}m")
+    if result.get("dist_to_hospital"):
+        poi_summary.append(f"Szpital: {int(result['dist_to_hospital'])}m")
+    if result.get("dist_to_bus_stop"):
+        poi_summary.append(f"Przystanek: {int(result['dist_to_bus_stop'])}m")
+
+    nature_summary = []
+    if result.get("dist_to_forest"):
+        nature_summary.append(f"Las: {int(result['dist_to_forest'])}m")
+    if result.get("dist_to_water"):
+        nature_summary.append(f"Woda: {int(result['dist_to_water'])}m")
+    if result.get("pct_forest_500m"):
+        nature_summary.append(f"Las w 500m: {round(result['pct_forest_500m'] * 100, 1)}%")
+
+    environment = []
+    if result.get("dist_to_industrial"):
+        environment.append(f"Przemysł: {int(result['dist_to_industrial'])}m")
+    if result.get("count_buildings_500m"):
+        environment.append(f"Budynki w 500m: {result['count_buildings_500m']}")
+
+    return {
+        "parcel_id": parcel_id,
+        "area_m2": result.get("area_m2"),
+        "location": {
+            "gmina": result.get("gmina"),
+            "miejscowosc": result.get("miejscowosc"),
+            "powiat": result.get("powiat"),
+            "charakter": result.get("charakter_terenu"),
+        },
+        "scores": {
+            "quietness": result.get("quietness_score"),
+            "nature": result.get("nature_score"),
+            "accessibility": result.get("accessibility_score"),
+        },
+        "categories": {
+            "cisza": result.get("kategoria_ciszy"),
+            "natura": result.get("kategoria_natury"),
+            "dostep": result.get("kategoria_dostepu"),
+            "zabudowa": result.get("gestosc_zabudowy"),
+        },
+        "mpzp": {
+            "has_mpzp": result.get("has_mpzp"),
+            "symbol": result.get("mpzp_symbol"),
+            "nazwa": result.get("mpzp_nazwa"),
+            "budowlany": result.get("mpzp_budowlany"),
+        },
+        "poi_distances": poi_summary,
+        "nature_distances": nature_summary,
+        "environment": environment,
+        "summary": result.get("summary", []),
+        "coordinates": {"lat": result.get("lat"), "lon": result.get("lon")},
+    }
+
+
+async def _get_area_statistics(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get statistics for a gmina or powiat."""
+    gmina = params.get("gmina")
+    powiat = params.get("powiat")
+
+    result = await graph_service.get_area_category_stats(gmina=gmina, powiat=powiat)
+
+    if "error" in result:
+        return result
+
+    # Format distributions for human readability
+    quietness_summary = []
+    for item in result.get("quietness_distribution", []):
+        if item.get("category") and item.get("count"):
+            quietness_summary.append(f"{item['category']}: {item['count']:,}")
+
+    nature_summary = []
+    for item in result.get("nature_distribution", []):
+        if item.get("category") and item.get("count"):
+            nature_summary.append(f"{item['category']}: {item['count']:,}")
+
+    character_summary = []
+    for item in result.get("character_distribution", []):
+        if item.get("category") and item.get("count"):
+            character_summary.append(f"{item['category']}: {item['count']:,}")
+
+    location_desc = gmina or powiat or "całe województwo"
+
+    return {
+        "location": location_desc,
+        "total_parcels": result.get("total_parcels", 0),
+        "with_mpzp": result.get("with_mpzp", 0),
+        "pct_mpzp": result.get("pct_mpzp", 0),
+        "with_road_access": result.get("with_road_access", 0),
+        "pct_road_access": result.get("pct_road_access", 0),
+        "quietness_distribution": quietness_summary,
+        "nature_distribution": nature_summary,
+        "character_distribution": character_summary,
+        "summary": f"W {location_desc}: {result.get('total_parcels', 0):,} działek, "
+                   f"{result.get('pct_mpzp', 0)}% z MPZP, "
+                   f"{result.get('pct_road_access', 0)}% z dostępem do drogi",
+    }
+
+
+async def _find_by_mpzp_symbol(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Find parcels by MPZP symbol."""
+    symbol = params["symbol"]
+    gmina = params.get("gmina")
+    limit = params.get("limit", 20)
+
+    results = await graph_service.find_parcels_by_mpzp(symbol, gmina=gmina, limit=limit)
+
+    if not results:
+        location_info = f" w gminie {gmina}" if gmina else ""
+        return {
+            "symbol": symbol,
+            "count": 0,
+            "message": f"Nie znaleziono działek z symbolem {symbol}{location_info}",
+        }
+
+    # Format results
+    parcels = []
+    for r in results:
+        parcels.append({
+            "id": r.get("id"),
+            "area_m2": r.get("area_m2"),
+            "gmina": r.get("gmina"),
+            "quietness": r.get("quietness"),
+            "lat": r.get("lat"),
+            "lon": r.get("lon"),
+        })
+
+    location_info = f" w gminie {gmina}" if gmina else ""
+
+    return {
+        "symbol": symbol,
+        "count": len(results),
+        "message": f"Znaleziono {len(results)} działek z symbolem {symbol}{location_info}",
+        "parcels": parcels,
+    }
+
+
+# --------------- SPATIAL (PostGIS) IMPLEMENTATIONS ---------------
+
+async def _search_around_point(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Search parcels within radius of a point using PostGIS."""
+    lat = params["lat"]
+    lon = params["lon"]
+    radius_m = min(params.get("radius_m", 5000), 20000)  # Cap at 20km
+    limit = params.get("limit", 20)
+
+    # Validate coordinates (roughly Poland)
+    if not (49.0 <= lat <= 55.0 and 14.0 <= lon <= 24.0):
+        return {"error": f"Współrzędne poza Polską: ({lat}, {lon})"}
+
+    search_params = SpatialSearchParams(
+        lat=lat,
+        lon=lon,
+        radius_m=radius_m,
+        min_area=params.get("min_area"),
+        max_area=params.get("max_area"),
+        has_mpzp=params.get("has_mpzp"),
+        limit=limit,
+    )
+
+    results = await spatial_service.search_by_radius(search_params)
+
+    if not results:
+        return {
+            "count": 0,
+            "message": f"Nie znaleziono działek w promieniu {radius_m/1000:.1f}km od punktu ({lat:.4f}, {lon:.4f})",
+            "search_params": {"lat": lat, "lon": lon, "radius_m": radius_m},
+        }
+
+    # Format results with distance info
+    parcels = []
+    for r in results:
+        parcels.append({
+            "id": r.get("id_dzialki"),
+            "gmina": r.get("gmina"),
+            "miejscowosc": r.get("miejscowosc"),
+            "area_m2": r.get("area_m2"),
+            "distance_m": round(r.get("distance_m", 0)),
+            "quietness_score": r.get("quietness_score"),
+            "nature_score": r.get("nature_score"),
+            "has_mpzp": r.get("has_mpzp"),
+            "mpzp_symbol": r.get("mpzp_symbol"),
+            "lat": r.get("centroid_lat"),
+            "lon": r.get("centroid_lon"),
+        })
+
+    return {
+        "count": len(results),
+        "message": f"Znaleziono {len(results)} działek w promieniu {radius_m/1000:.1f}km",
+        "search_center": {"lat": lat, "lon": lon},
+        "radius_m": radius_m,
+        "parcels": parcels,
+    }
+
+
+async def _search_in_bbox(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Search parcels in bounding box using PostGIS."""
+    min_lat = params["min_lat"]
+    min_lon = params["min_lon"]
+    max_lat = params["max_lat"]
+    max_lon = params["max_lon"]
+    limit = params.get("limit", 50)
+
+    # Validate bounding box
+    if min_lat >= max_lat or min_lon >= max_lon:
+        return {"error": "Nieprawidłowy bounding box: min musi być mniejsze od max"}
+
+    # Check if bbox is within Poland (roughly)
+    if not (49.0 <= min_lat <= 55.0 and 14.0 <= min_lon <= 24.0):
+        return {"error": "Bounding box poza Polską"}
+
+    # Check bbox size (max ~50km x 50km)
+    lat_diff = max_lat - min_lat
+    lon_diff = max_lon - min_lon
+    if lat_diff > 0.5 or lon_diff > 0.7:  # Roughly 50km
+        return {"error": "Bounding box za duży. Maksymalnie ~50km x 50km."}
+
+    search_params = BBoxSearchParams(
+        min_lat=min_lat,
+        min_lon=min_lon,
+        max_lat=max_lat,
+        max_lon=max_lon,
+        limit=limit,
+    )
+
+    results = await spatial_service.search_by_bbox(search_params)
+
+    if not results:
+        return {
+            "count": 0,
+            "message": "Nie znaleziono działek w zaznaczonym obszarze",
+            "bbox": {"min_lat": min_lat, "min_lon": min_lon, "max_lat": max_lat, "max_lon": max_lon},
+        }
+
+    # Format results
+    parcels = []
+    for r in results:
+        parcels.append({
+            "id": r.get("id_dzialki"),
+            "gmina": r.get("gmina"),
+            "miejscowosc": r.get("miejscowosc"),
+            "area_m2": r.get("area_m2"),
+            "quietness_score": r.get("quietness_score"),
+            "nature_score": r.get("nature_score"),
+            "has_mpzp": r.get("has_mpzp"),
+            "mpzp_symbol": r.get("mpzp_symbol"),
+            "lat": r.get("centroid_lat"),
+            "lon": r.get("centroid_lon"),
+        })
+
+    # Calculate center
+    center_lat = (min_lat + max_lat) / 2
+    center_lon = (min_lon + max_lon) / 2
+
+    return {
+        "count": len(results),
+        "message": f"Znaleziono {len(results)} działek w zaznaczonym obszarze",
+        "bbox": {"min_lat": min_lat, "min_lon": min_lon, "max_lat": max_lat, "max_lon": max_lon},
+        "center": {"lat": center_lat, "lon": center_lon},
+        "parcels": parcels,
     }
 
 

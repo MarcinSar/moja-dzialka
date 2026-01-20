@@ -54,6 +54,7 @@ class SearchPreferences:
     max_dist_to_school_m: Optional[int] = None
     max_dist_to_shop_m: Optional[int] = None
     max_dist_to_bus_stop_m: Optional[int] = None
+    max_dist_to_hospital_m: Optional[int] = None  # Medical accessibility
     has_road_access: Optional[bool] = None
 
     # === NATURE PROXIMITY ===
@@ -98,6 +99,7 @@ class SearchPreferences:
             max_dist_to_school_m=self.max_dist_to_school_m,
             max_dist_to_shop_m=self.max_dist_to_shop_m,
             max_dist_to_bus_stop_m=self.max_dist_to_bus_stop_m,
+            max_dist_to_hospital_m=self.max_dist_to_hospital_m,
             has_road_access=self.has_road_access,
             max_dist_to_forest_m=self.max_dist_to_forest_m,
             max_dist_to_water_m=self.max_dist_to_water_m,

@@ -17,7 +17,7 @@ from app.services.database import (
     check_all_connections,
     close_all_connections,
 )
-from app.services.spatial_service import spatial_service, SpatialSearchParams
+from app.services.spatial_service import spatial_service, SpatialSearchParams, BBoxSearchParams
 from app.services.vector_service import vector_service
 from app.services.graph_service import graph_service
 from app.services.parcel_search import hybrid_search, SearchPreferences, SearchResult
@@ -39,6 +39,7 @@ __all__ = [
 
     # Types
     "SpatialSearchParams",
+    "BBoxSearchParams",
     "SearchPreferences",
     "SearchResult",
 ]

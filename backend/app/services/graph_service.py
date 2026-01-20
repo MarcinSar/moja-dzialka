@@ -64,6 +64,7 @@ class ParcelSearchCriteria:
     max_dist_to_school_m: Optional[int] = None
     max_dist_to_shop_m: Optional[int] = None
     max_dist_to_bus_stop_m: Optional[int] = None
+    max_dist_to_hospital_m: Optional[int] = None  # Medical accessibility
     has_road_access: Optional[bool] = None
 
     # Nature proximity
@@ -509,6 +510,13 @@ class GraphService:
             where_conditions.append("rb.distance_m <= $max_bus_dist")
             params["max_bus_dist"] = criteria.max_dist_to_bus_stop_m
 
+        if criteria.max_dist_to_hospital_m:
+            match_clauses.append("""
+                MATCH (d)-[rh:BLISKO_SZPITALA]->(poi_hosp:POIType {name: 'hospital'})
+            """)
+            where_conditions.append("rh.distance_m <= $max_hospital_dist")
+            params["max_hospital_dist"] = criteria.max_dist_to_hospital_m
+
         # Nature proximity filters
         if criteria.max_dist_to_forest_m:
             match_clauses.append("""
@@ -709,6 +717,314 @@ class GraphService:
         except Exception as e:
             logger.error(f"Get data summary error: {e}")
             return {}
+
+    # =========================================================================
+    # ADMINISTRATIVE HIERARCHY EXPLORATION
+    # =========================================================================
+
+    async def get_children_in_hierarchy(
+        self,
+        level: str,
+        parent_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get children in administrative hierarchy.
+
+        Args:
+            level: "wojewodztwo" → returns powiaty
+                   "powiat" → returns gminy in powiat
+                   "gmina" → returns miejscowości in gmina
+            parent_name: Optional name of parent unit (required for powiat/gmina level)
+
+        Returns:
+            List of children with counts
+        """
+        try:
+            if level == "wojewodztwo":
+                # Return all powiaty in pomorskie
+                query = """
+                    MATCH (p:Powiat)-[:W_WOJEWODZTWIE]->(w:Wojewodztwo)
+                    OPTIONAL MATCH (g:Gmina)-[:W_POWIECIE]->(p)
+                    OPTIONAL MATCH (d:Dzialka)-[:W_GMINIE]->(g)
+                    WITH p, count(DISTINCT g) as gminy_count, count(DISTINCT d) as parcel_count
+                    RETURN
+                        p.name as name,
+                        gminy_count,
+                        parcel_count
+                    ORDER BY p.name
+                """
+                results = await neo4j.run(query)
+                return [dict(r) for r in results]
+
+            elif level == "powiat" and parent_name:
+                # Return gminy in given powiat
+                query = """
+                    MATCH (g:Gmina)-[:W_POWIECIE]->(p:Powiat {name: $parent})
+                    OPTIONAL MATCH (d:Dzialka)-[:W_GMINIE]->(g)
+                    WITH g, count(d) as parcel_count
+                    RETURN
+                        g.name as name,
+                        parcel_count
+                    ORDER BY g.name
+                """
+                results = await neo4j.run(query, {"parent": parent_name})
+                return [dict(r) for r in results]
+
+            elif level == "gmina" and parent_name:
+                # Return miejscowości in given gmina
+                query = """
+                    MATCH (m:Miejscowosc)-[:W_GMINIE]->(g:Gmina {name: $parent})
+                    OPTIONAL MATCH (d:Dzialka)-[:W_MIEJSCOWOSCI]->(m)
+                    OPTIONAL MATCH (m)-[:MA_RODZAJ]->(r:RodzajMiejscowosci)
+                    WITH m, r, count(d) as parcel_count
+                    RETURN
+                        m.name as name,
+                        r.name as rodzaj,
+                        parcel_count
+                    ORDER BY parcel_count DESC, m.name
+                """
+                results = await neo4j.run(query, {"parent": parent_name})
+                return [dict(r) for r in results]
+
+            else:
+                return []
+
+        except Exception as e:
+            logger.error(f"Get children in hierarchy error: {e}")
+            return []
+
+    async def get_all_powiaty(self) -> List[str]:
+        """Get list of all powiat names."""
+        query = """
+            MATCH (p:Powiat)
+            RETURN p.name as name
+            ORDER BY p.name
+        """
+        try:
+            results = await neo4j.run(query)
+            return [r["name"] for r in results]
+        except Exception as e:
+            logger.error(f"Get all powiaty error: {e}")
+            return []
+
+    async def get_area_category_stats(
+        self,
+        gmina: Optional[str] = None,
+        powiat: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get distribution of parcels by category in given area.
+
+        Returns counts for: quietness, nature, accessibility, MPZP, etc.
+
+        Args:
+            gmina: Optional gmina filter
+            powiat: Optional powiat filter
+
+        Returns:
+            Dictionary with category distributions
+        """
+        # Build location filter
+        location_filter = ""
+        params = {}
+
+        if gmina:
+            location_filter = "MATCH (d)-[:W_GMINIE]->(g:Gmina {name: $gmina})"
+            params["gmina"] = gmina
+        elif powiat:
+            location_filter = """
+                MATCH (d)-[:W_GMINIE]->(g:Gmina)-[:W_POWIECIE]->(p:Powiat {name: $powiat})
+            """
+            params["powiat"] = powiat
+
+        # Complex query to get all category distributions
+        query = f"""
+            MATCH (d:Dzialka)
+            {location_filter}
+            WITH d
+
+            // Total count
+            WITH count(d) as total, collect(d) as all_parcels
+
+            // Quietness distribution
+            UNWIND all_parcels as d1
+            OPTIONAL MATCH (d1)-[:MA_CISZE]->(c:KategoriaCiszy)
+            WITH total, all_parcels, c.name as cisza_cat, count(d1) as cisza_count
+            WITH total, all_parcels, collect({{category: cisza_cat, count: cisza_count}}) as quietness_stats
+
+            // Nature distribution
+            UNWIND all_parcels as d2
+            OPTIONAL MATCH (d2)-[:MA_NATURE]->(n:KategoriaNatury)
+            WITH total, all_parcels, quietness_stats, n.name as natura_cat, count(d2) as natura_count
+            WITH total, all_parcels, quietness_stats, collect({{category: natura_cat, count: natura_count}}) as nature_stats
+
+            // Character distribution
+            UNWIND all_parcels as d3
+            OPTIONAL MATCH (d3)-[:MA_CHARAKTER]->(ch:CharakterTerenu)
+            WITH total, all_parcels, quietness_stats, nature_stats, ch.name as char_cat, count(d3) as char_count
+            WITH total, all_parcels, quietness_stats, nature_stats, collect({{category: char_cat, count: char_count}}) as character_stats
+
+            // MPZP stats
+            UNWIND all_parcels as d4
+            WITH total, quietness_stats, nature_stats, character_stats,
+                 sum(CASE WHEN d4.has_mpzp = true THEN 1 ELSE 0 END) as with_mpzp,
+                 sum(CASE WHEN d4.has_public_road_access = true THEN 1 ELSE 0 END) as with_road_access
+
+            RETURN
+                total,
+                with_mpzp,
+                with_road_access,
+                quietness_stats,
+                nature_stats,
+                character_stats
+        """
+
+        try:
+            results = await neo4j.run(query, params)
+            if results:
+                r = results[0]
+                total = r.get("total", 0)
+                with_mpzp = r.get("with_mpzp", 0)
+                with_road = r.get("with_road_access", 0)
+
+                return {
+                    "total_parcels": total,
+                    "with_mpzp": with_mpzp,
+                    "pct_mpzp": round((with_mpzp / total * 100), 1) if total > 0 else 0,
+                    "with_road_access": with_road,
+                    "pct_road_access": round((with_road / total * 100), 1) if total > 0 else 0,
+                    "quietness_distribution": r.get("quietness_stats", []),
+                    "nature_distribution": r.get("nature_stats", []),
+                    "character_distribution": r.get("character_stats", []),
+                    "location_filter": {"gmina": gmina, "powiat": powiat},
+                }
+            return {"error": "No data found"}
+        except Exception as e:
+            logger.error(f"Get area category stats error: {e}")
+            return {"error": str(e)}
+
+    async def get_parcel_neighborhood(self, parcel_id: str) -> Dict[str, Any]:
+        """
+        Get detailed neighborhood context for a parcel.
+
+        Returns all POI distances, land cover percentages, and character.
+
+        Args:
+            parcel_id: ID of the parcel
+
+        Returns:
+            Dictionary with full neighborhood context
+        """
+        query = """
+            MATCH (d:Dzialka {id_dzialki: $parcel_id})
+
+            // Basic info
+            OPTIONAL MATCH (d)-[:W_GMINIE]->(g:Gmina)
+            OPTIONAL MATCH (d)-[:W_MIEJSCOWOSCI]->(m:Miejscowosc)
+            OPTIONAL MATCH (g)-[:W_POWIECIE]->(p:Powiat)
+            OPTIONAL MATCH (d)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)
+            OPTIONAL MATCH (d)-[:MA_CHARAKTER]->(ch:CharakterTerenu)
+            OPTIONAL MATCH (d)-[:MA_CISZE]->(ci:KategoriaCiszy)
+            OPTIONAL MATCH (d)-[:MA_NATURE]->(na:KategoriaNatury)
+            OPTIONAL MATCH (d)-[:MA_DOSTEP]->(ac:KategoriaDostepu)
+            OPTIONAL MATCH (d)-[:MA_ZABUDOWE]->(za:GestoscZabudowy)
+
+            // POI distances
+            OPTIONAL MATCH (d)-[rs:BLISKO_SZKOLY]->(:POIType {name: 'school'})
+            OPTIONAL MATCH (d)-[rsh:BLISKO_SKLEPU]->(:POIType {name: 'shop'})
+            OPTIONAL MATCH (d)-[rh:BLISKO_SZPITALA]->(:POIType {name: 'hospital'})
+            OPTIONAL MATCH (d)-[rb:BLISKO_PRZYSTANKU]->(:POIType {name: 'bus_stop'})
+            OPTIONAL MATCH (d)-[ri:BLISKO_PRZEMYSLU]->(:POIType {name: 'industrial'})
+
+            // Nature distances
+            OPTIONAL MATCH (d)-[rf:BLISKO_LASU]->(:LandCoverType {name: 'forest'})
+            OPTIONAL MATCH (d)-[rw:BLISKO_WODY]->(:LandCoverType {name: 'water'})
+
+            RETURN
+                d.id_dzialki as id,
+                d.area_m2 as area_m2,
+                d.centroid_lat as lat,
+                d.centroid_lon as lon,
+
+                // Location
+                g.name as gmina,
+                m.name as miejscowosc,
+                p.name as powiat,
+
+                // Categories
+                ch.name as charakter_terenu,
+                ci.name as kategoria_ciszy,
+                na.name as kategoria_natury,
+                ac.name as kategoria_dostepu,
+                za.name as gestosc_zabudowy,
+
+                // Scores
+                d.quietness_score as quietness_score,
+                d.nature_score as nature_score,
+                d.accessibility_score as accessibility_score,
+
+                // MPZP
+                d.has_mpzp as has_mpzp,
+                s.kod as mpzp_symbol,
+                s.nazwa as mpzp_nazwa,
+                s.budowlany as mpzp_budowlany,
+
+                // POI distances
+                rs.distance_m as dist_to_school,
+                rsh.distance_m as dist_to_shop,
+                rh.distance_m as dist_to_hospital,
+                rb.distance_m as dist_to_bus_stop,
+                ri.distance_m as dist_to_industrial,
+
+                // Nature distances
+                rf.distance_m as dist_to_forest,
+                rw.distance_m as dist_to_water,
+
+                // Buffer analysis
+                d.pct_forest_500m as pct_forest_500m,
+                d.pct_water_500m as pct_water_500m,
+                d.count_buildings_500m as count_buildings_500m,
+
+                // Road access
+                d.has_public_road_access as has_road_access
+        """
+
+        try:
+            results = await neo4j.run(query, {"parcel_id": parcel_id})
+            if results:
+                r = dict(results[0])
+
+                # Build human-readable summary
+                summary = []
+
+                # Location
+                if r.get("miejscowosc"):
+                    summary.append(f"Lokalizacja: {r['miejscowosc']}, gm. {r.get('gmina', '')}")
+                elif r.get("gmina"):
+                    summary.append(f"Lokalizacja: {r['gmina']}")
+
+                # Character
+                if r.get("charakter_terenu"):
+                    summary.append(f"Charakter: {r['charakter_terenu']}")
+
+                # Quietness
+                if r.get("quietness_score"):
+                    summary.append(f"Cisza: {int(r['quietness_score'])}/100 ({r.get('kategoria_ciszy', '')})")
+
+                # Nature
+                if r.get("nature_score"):
+                    summary.append(f"Natura: {int(r['nature_score'])}/100 ({r.get('kategoria_natury', '')})")
+
+                # Accessibility
+                if r.get("accessibility_score"):
+                    summary.append(f"Dostępność: {int(r['accessibility_score'])}/100 ({r.get('kategoria_dostepu', '')})")
+
+                r["summary"] = summary
+                return r
+            return {"error": f"Parcel not found: {parcel_id}"}
+        except Exception as e:
+            logger.error(f"Get parcel neighborhood error: {e}")
+            return {"error": str(e)}
 
 
 # Global instance
