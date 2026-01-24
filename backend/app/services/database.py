@@ -3,9 +3,10 @@ Database connection managers for all data stores.
 
 Provides connection pooling and async support for:
 - PostGIS (PostgreSQL with spatial extensions)
-- Neo4j (Graph database)
-- Milvus (Vector database)
+- Neo4j (Graph database with Vector Index)
 - Redis (Cache)
+
+Note: Milvus was replaced with Neo4j Vector Index for simplicity.
 """
 
 import asyncio
@@ -17,10 +18,17 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from neo4j import GraphDatabase, AsyncGraphDatabase
-from pymilvus import connections, Collection, utility
 import redis.asyncio as redis
 
 from app.config import settings
+
+# Optional pymilvus import (deprecated, use Neo4j Vector Index instead)
+try:
+    from pymilvus import connections, Collection, utility
+    MILVUS_AVAILABLE = True
+except ImportError:
+    MILVUS_AVAILABLE = False
+    logger.warning("pymilvus not installed - using Neo4j Vector Index instead")
 
 
 # =============================================================================
@@ -177,20 +185,29 @@ class Neo4jManager:
 
 
 # =============================================================================
-# MILVUS
+# MILVUS (DEPRECATED - Use Neo4j Vector Index)
 # =============================================================================
 
 class MilvusManager:
-    """Milvus connection manager."""
+    """Milvus connection manager (deprecated - use Neo4j Vector Index).
+
+    This class is kept for backwards compatibility but vector search
+    should be done via Neo4j's native vector index.
+    """
 
     COLLECTION_NAME = "parcels"
 
     def __init__(self):
         self._connected = False
         self._collection = None
+        self._available = MILVUS_AVAILABLE
 
     def connect(self):
         """Connect to Milvus."""
+        if not self._available:
+            logger.debug("Milvus not available - using Neo4j Vector Index")
+            return
+
         if not self._connected:
             connections.connect(
                 alias="default",
@@ -200,21 +217,25 @@ class MilvusManager:
             self._connected = True
             logger.info(f"Milvus connected: {settings.milvus_host}:{settings.milvus_port}")
 
-    def get_collection(self, fresh: bool = False) -> Optional[Collection]:
+    def get_collection(self, fresh: bool = False):
         """Get parcels collection."""
+        if not self._available:
+            return None
+
         self.connect()
         if utility.has_collection(self.COLLECTION_NAME):
             if fresh or self._collection is None:
-                # Create fresh collection reference
                 self._collection = Collection(self.COLLECTION_NAME)
                 self._collection.load()
             return self._collection
         return None
 
     def refresh_collection(self):
-        """Refresh collection reference - call if searches fail."""
+        """Refresh collection reference."""
+        if not self._available:
+            return
+
         logger.info("Refreshing Milvus collection and reconnecting...")
-        # Release collection
         if self._collection is not None:
             try:
                 self._collection.release()
@@ -222,14 +243,12 @@ class MilvusManager:
                 logger.warning(f"Failed to release collection: {e}")
         self._collection = None
 
-        # Disconnect and reconnect
         try:
             connections.disconnect("default")
         except Exception:
             pass
         self._connected = False
 
-        # Force reconnect and reload
         self.connect()
         self.get_collection()
 
@@ -241,25 +260,15 @@ class MilvusManager:
         output_fields: list = None,
         fresh: bool = False,
     ) -> list:
-        """
-        Search for similar vectors.
+        """Search for similar vectors (use Neo4j Vector Index instead)."""
+        if not self._available:
+            logger.warning("Milvus not available - use Neo4j vector search")
+            return []
 
-        Args:
-            query_vectors: List of query vectors
-            top_k: Number of results per query
-            filter_expr: Milvus filter expression (e.g., "area_m2 > 1000")
-            output_fields: Fields to return
-            fresh: If True, create fresh collection reference
-
-        Returns:
-            List of search results
-        """
-        # When filter is used, create completely fresh connection to avoid stale state
         if filter_expr is not None or fresh:
             logger.info(f"Creating fresh Milvus connection for search with filter: {filter_expr}")
             try:
                 connections.disconnect("default")
-                logger.info("Disconnected from Milvus")
             except Exception as e:
                 logger.warning(f"Disconnect failed: {e}")
             self._connected = False
@@ -287,6 +296,9 @@ class MilvusManager:
 
     async def health_check(self) -> bool:
         """Check Milvus connection."""
+        if not self._available:
+            return False  # Not available, report as not connected
+
         try:
             self.connect()
             return utility.has_collection(self.COLLECTION_NAME)
@@ -296,6 +308,9 @@ class MilvusManager:
 
     def close(self):
         """Disconnect from Milvus."""
+        if not self._available:
+            return
+
         if self._connected:
             connections.disconnect("default")
             self._connected = False

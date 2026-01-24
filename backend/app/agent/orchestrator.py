@@ -188,6 +188,50 @@ Znasz orientacyjne ceny gruntów w dzielnicach (2024-2026):
 
 ---
 
+## TWOJA WIEDZA O WODACH W TRÓJMIEŚCIE
+
+### MORZE BAŁTYCKIE (premium +50-100%)
+- Linia brzegowa: Brzeźno, Jelitkowo, Sopot, Orłowo, Redłowo
+- "Blisko morza" = do 500m dla premium, do 1000m dla dobrego widoku
+- UWAGA: Strefy zalewowe, ochrona przyrody przy wybrzeżu
+
+### JEZIORA (premium +20-40%)
+- Osowskie (Osowa) - popularne, rodzinne, spokojna okolica
+- Jasień - duże, atrakcyjne dla inwestycji
+- Wysockie (Gdynia) - kameralne
+- Straszyńskie - blisko centrum, rezerwat
+- "Przy jeziorze" = do 300m
+
+### RZEKI (premium +10-20%)
+- Radunia - główna rzeka Gdańska, malownicza
+- Motława - historyczna, Stare Miasto
+- Strzyża - dzielnice zachodnie
+- Potok Oliwski - park oliwski
+- "Przy rzece" = do 200m
+
+### KANAŁY (premium +5-10%)
+- Kanał Raduni - historyczny, przez centrum
+- Czarna Łacha - przy Wiśle
+
+### JAK ROZMAWIAĆ O WODZIE
+
+Gdy user mówi "blisko wody" → ZAPYTAJ jaki typ!
+- "Nad morzem? Przy jeziorze? Czy wystarczy rzeka lub kanał?"
+
+Gdy user wybiera typ → powiedz o wpływie na cenę:
+- "Działki przy morzu to segment ultra-premium, +50-100% ceny"
+- "Osowa przy jeziorze to świetny kompromis - natura i rozsądna cena"
+
+Gdy prezentujesz działkę → dodaj info o wodzie:
+- "300m od Jeziora Osowskiego - świetna lokalizacja dla rodziny"
+
+### NOWE NARZĘDZIA DLA WODY
+- `search_by_water_type(water_type, max_distance, ...)` - szukaj przy określonym typie wody
+- `get_water_info(parcel_id)` - wszystkie wody w pobliżu działki
+- `get_parcel_full_context(parcel_id)` - pełny kontekst z wodą i cenami
+
+---
+
 ## TWOJA STRATEGIA WYSZUKIWANIA
 
 Masz 3 bazy danych. Wybieraj mądrze:
@@ -242,6 +286,11 @@ execute_search łączy Neo4j + PostGIS + Milvus gdy:
 - `get_parcel_details` → pełne info o konkretnej działce
 - `generate_map_data` → przygotuj dane do mapy
 - `estimate_parcel_value` → oszacuj wartość działki
+
+### Narzędzia Wodne (NOWE)
+- `search_by_water_type` → szukaj przy morzu/jeziorze/rzece
+- `get_water_info` → co jest w pobliżu (odległości do wszystkich wód)
+- `get_parcel_full_context` → PEŁNY kontekst działki (woda, ceny, POG, wszystko)
 
 ---
 
@@ -375,7 +424,7 @@ class ParcelAgent:
     Implements Human-in-the-Loop, Guard Patterns, and Critic Pattern.
     """
 
-    MODEL = "claude-haiku-4-5"
+    MODEL = "claude-sonnet-4-5"
     MAX_TOKENS = 4096
     MAX_TOOL_ITERATIONS = 8
 

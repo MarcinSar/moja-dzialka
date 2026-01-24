@@ -752,6 +752,130 @@ WAŻNE: To są ORIENTACYJNE ceny rynkowe, nie ceny ofertowe. Zawsze zaznacz to u
             "required": ["city", "area_m2"]
         }
     },
+
+    # =========================================================================
+    # WATER-RELATED TOOLS (NEW - Neo4j Redesign)
+    # =========================================================================
+    {
+        "name": "search_by_water_type",
+        "description": """
+Wyszukaj działki blisko określonego typu wody.
+
+TYPY WÓD (Trójmiasto):
+- morze: Morze Bałtyckie, linia brzegowa (Brzeźno, Jelitkowo, Sopot, Orłowo)
+- jezioro: Osowskie, Jasień, Wysockie, Straszyńskie - idealne dla rodzin
+- rzeka: Radunia, Motława, Strzyża - walor krajobrazowy
+- kanal: Kanał Raduni - historyczne kanały
+- staw: Małe zbiorniki wodne, oczka
+
+WPŁYW NA CENĘ:
+- Morze <500m: +50-100% wartości
+- Jezioro <300m: +20-40%
+- Rzeka <200m: +10-20%
+
+UŻYWAJ gdy:
+- User mówi "blisko morza", "nad jeziorem", "przy wodzie"
+- PYTAJ o typ wody gdy user mówi ogólnie "blisko wody"!
+
+EXAMPLE: User: "Działka nad morzem w Sopocie"
+→ search_by_water_type(water_type="morze", city="Sopot", max_distance=500)
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "water_type": {
+                    "type": "string",
+                    "enum": ["morze", "jezioro", "rzeka", "kanal", "staw"],
+                    "description": "Typ wody do wyszukania"
+                },
+                "max_distance": {
+                    "type": "integer",
+                    "description": "Maksymalna odległość w metrach (domyślnie 500)"
+                },
+                "city": {
+                    "type": "string",
+                    "description": "Miasto (Gdańsk, Gdynia, Sopot) - opcjonalne"
+                },
+                "min_area": {
+                    "type": "integer",
+                    "description": "Minimalna powierzchnia w m²"
+                },
+                "max_area": {
+                    "type": "integer",
+                    "description": "Maksymalna powierzchnia w m²"
+                },
+                "is_built": {
+                    "type": "boolean",
+                    "description": "Filtr zabudowania (true=zabudowane, false=niezabudowane)"
+                },
+                "is_residential_zone": {
+                    "type": "boolean",
+                    "description": "Tylko strefy mieszkaniowe"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Liczba wyników (domyślnie 10)"
+                }
+            },
+            "required": ["water_type"]
+        }
+    },
+    {
+        "name": "get_water_info",
+        "description": """
+Pobierz informacje o wodach w pobliżu działki.
+
+Zwraca:
+- Odległości do wszystkich typów wód (morze, jezioro, rzeka, kanał, staw)
+- Najbliższy typ wody
+- Podsumowanie tekstowe
+
+UŻYWAJ gdy:
+- Prezentujesz szczegóły działki i chcesz dodać info o wodzie
+- User pyta "co jest w pobliżu tej działki?"
+- Chcesz wyjaśnić wartość lokalizacji (bliskość wody = premium)
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_id": {
+                    "type": "string",
+                    "description": "ID działki (np. '220101_1.0001.24/1')"
+                }
+            },
+            "required": ["parcel_id"]
+        }
+    },
+    {
+        "name": "get_parcel_full_context",
+        "description": """
+Pobierz PEŁNY kontekst działki dla kompleksowej prezentacji.
+
+Zwraca WSZYSTKO:
+- Lokalizacja (dzielnica, gmina)
+- Kategorie (cisza, natura, dostęp, gęstość zabudowy)
+- Odległości do POI (szkoła, przystanek, las, woda)
+- Informacje o wodzie (typ, odległość, premium factor)
+- POG/MPZP (strefa, parametry zabudowy)
+- Segment cenowy i szacowana wartość
+- Podsumowanie tekstowe
+
+UŻYWAJ gdy:
+- Prezentujesz wybraną działkę szczegółowo
+- User pyta "opowiedz mi więcej o tej działce"
+- Chcesz dać pełny obraz przed podjęciem decyzji
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_id": {
+                    "type": "string",
+                    "description": "ID działki (np. '220101_1.0001.24/1')"
+                }
+            },
+            "required": ["parcel_id"]
+        }
+    },
 ]
 
 
@@ -822,6 +946,14 @@ async def execute_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]
             return await _get_district_prices(params)
         elif tool_name == "estimate_parcel_value":
             return await _estimate_parcel_value(params)
+
+        # Water tools (NEW)
+        elif tool_name == "search_by_water_type":
+            return await _search_by_water_type(params)
+        elif tool_name == "get_water_info":
+            return await _get_water_info(params)
+        elif tool_name == "get_parcel_full_context":
+            return await _get_parcel_full_context(params)
 
         else:
             return {"error": f"Unknown tool: {tool_name}"}
@@ -2040,3 +2172,99 @@ async def _estimate_parcel_value(params: Dict[str, Any]) -> Dict[str, Any]:
         "note": "To jest ORIENTACYJNA wycena na podstawie średnich cen w dzielnicy. "
                 "Faktyczna cena zależy od: kształtu działki, uzbrojenia, MPZP, dostępu do drogi.",
     }
+
+
+# --------------- WATER TOOL IMPLEMENTATIONS (NEW) ---------------
+
+async def _search_by_water_type(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Search for parcels near a specific type of water."""
+    from app.services.graph_service import graph_service
+
+    water_type = params.get("water_type")
+    if not water_type:
+        return {"error": "Podaj typ wody (morze, jezioro, rzeka, kanal, staw)"}
+
+    valid_types = ["morze", "jezioro", "rzeka", "kanal", "staw"]
+    if water_type not in valid_types:
+        return {"error": f"Nieznany typ wody. Dostępne: {', '.join(valid_types)}"}
+
+    max_distance = params.get("max_distance", 500)
+    city = params.get("city")
+    min_area = params.get("min_area")
+    max_area = params.get("max_area")
+    is_built = params.get("is_built")
+    is_residential_zone = params.get("is_residential_zone")
+    limit = params.get("limit", 10)
+
+    # Get results from graph service
+    results = await graph_service.search_parcels_by_water_type(
+        water_type=water_type,
+        max_distance=max_distance,
+        city=city,
+        min_area=min_area,
+        max_area=max_area,
+        is_built=is_built,
+        is_residential_zone=is_residential_zone,
+        limit=limit
+    )
+
+    if not results:
+        return {
+            "count": 0,
+            "results": [],
+            "message": f"Nie znaleziono działek blisko {water_type} (max {max_distance}m)" +
+                      (f" w {city}" if city else ""),
+            "hint": "Spróbuj zwiększyć max_distance lub zmienić kryteria"
+        }
+
+    # Add water type info to response
+    water_info = {
+        "morze": {"name_pl": "Morza Bałtyckiego", "premium": "+50-100%"},
+        "jezioro": {"name_pl": "jeziora", "premium": "+20-40%"},
+        "rzeka": {"name_pl": "rzeki", "premium": "+10-20%"},
+        "kanal": {"name_pl": "kanału", "premium": "+5-10%"},
+        "staw": {"name_pl": "stawu/oczka", "premium": "+5%"},
+    }
+
+    return {
+        "water_type": water_type,
+        "water_type_info": water_info.get(water_type, {}),
+        "max_distance": max_distance,
+        "city": city,
+        "count": len(results),
+        "results": results,
+        "note": f"Działki w odległości do {max_distance}m od {water_info.get(water_type, {}).get('name_pl', water_type)}. "
+               f"Bliskość wody dodaje {water_info.get(water_type, {}).get('premium', '')} do wartości."
+    }
+
+
+async def _get_water_info(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get information about water bodies near a parcel."""
+    from app.services.graph_service import graph_service
+
+    parcel_id = params.get("parcel_id")
+    if not parcel_id:
+        return {"error": "Podaj ID działki (parcel_id)"}
+
+    result = await graph_service.get_water_near_parcel(parcel_id)
+
+    if "error" in result:
+        return result
+
+    return result
+
+
+async def _get_parcel_full_context(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get full context for a parcel including all features."""
+    from app.services.graph_service import graph_service
+
+    parcel_id = params.get("parcel_id")
+    if not parcel_id:
+        return {"error": "Podaj ID działki (parcel_id)"}
+
+    result = await graph_service.get_parcel_full_context(parcel_id)
+
+    if "error" in result:
+        return result
+
+    return result

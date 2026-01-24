@@ -1,8 +1,9 @@
 # CLAUDE.md - Projekt moja-dzialka
 
-## Status: ARCHITEKTURA SOFTWARE 3.0 ZAIMPLEMENTOWANA (2026-01-24)
+## Status: NEO4J KNOWLEDGE GRAPH REDESIGN ZAIMPLEMENTOWANY (2026-01-24)
 
 Agent z 7-warstwowym modelem pamięci, skills registry i state machine routing.
+**NOWE:** Pełna klasyfikacja wód (6 typów), 68 kolumn działek, narzędzia wodne.
 Pełna wiedza o 155k działkach. API v1 (legacy) + API v2 (nowa architektura).
 Szczegółowy plan: `docs/PLAN_V2.md`, `docs/PLAN_V3_CONSOLIDATED.md`
 
@@ -48,9 +49,10 @@ Czyste, przetworzone dane w `data/ready-for-import/`:
 
 | Plik | Rekordów | Opis |
 |------|----------|------|
-| `parcels_enriched.gpkg` | 154,959 | Działki z 59 cechami |
+| `parcels_enriched.gpkg` | 154,959 | Działki z **68 cechami** (było 59) |
 | `pog_trojmiasto.gpkg` | 7,523 | Strefy planistyczne |
 | `poi_trojmiasto.gpkg` | 15,421 | Punkty zainteresowania |
+| `water_classified.gpkg` | 2,307 | **NOWE:** Sklasyfikowane obiekty wodne |
 
 ### Archiwum surowych danych (4.3 GB)
 
@@ -89,7 +91,7 @@ Atrybuty budynków (kompletność 97-100%):
 - `LICZBAKONDYGNACJI` - liczba pięter (1-39, mediana 2)
 - `KATEGORIAISTNIENIA` - status (eksploatowany 99%, w budowie 0.9%)
 
-### Działki ✅ WZBOGACONE (59 kolumn)
+### Działki ✅ WZBOGACONE (68 kolumn)
 - **Gdańsk:** 92,781 działek
 - **Gdynia:** 53,907 działek
 - **Sopot:** 8,271 działek
@@ -113,7 +115,41 @@ Atrybuty budynków (kompletność 97-100%):
 
 **Odległości:** dist_to_school, dist_to_bus_stop, dist_to_forest, dist_to_water, dist_to_shop, dist_to_main_road
 
+**Odległości do wód (NOWE):**
+- `dist_to_sea` - do morza (7,561 działek ≤500m)
+- `dist_to_river` - do rzeki (8,502 działek ≤200m)
+- `dist_to_lake` - do jeziora (5,975 działek ≤300m)
+- `dist_to_canal` - do kanału
+- `dist_to_pond` - do stawu
+- `nearest_water_type` - najbliższy typ wody (morze/rzeka/jezioro/kanal/staw)
+
 **Wskaźniki kompozytowe:** quietness_score, nature_score, accessibility_score
+
+**Kategorie binned (NOWE):**
+- `kategoria_ciszy` - bardzo_cicha (39), cicha (2,661), umiarkowana (10,576), glosna (141,683)
+- `kategoria_natury` - bardzo_zielona (76,609), zielona (78,324), umiarkowana (21), zurbanizowana (5)
+- `kategoria_dostepu` - doskonala (136,796), dobra (11,686), umiarkowana (5,087), ograniczona (1,390)
+- `gestosc_zabudowy` - gesta (147,502), umiarkowana (4,201), rzadka (1,993), bardzo_rzadka (1,263)
+
+### Wody ✅ SKLASYFIKOWANE (2026-01-24)
+
+Klasyfikacja 2,307 obiektów wodnych z BDOT10k do 6 typów:
+
+| Typ | Liczba | Premium | Przykłady |
+|-----|--------|---------|-----------|
+| morze | 20 | +50-100% | Morze Bałtyckie, Zatoka Gdańska |
+| jezioro | 99 | +20-40% | Osowskie, Jasień, Wysockie, Straszyńskie |
+| rzeka | 96 | +10-20% | Radunia, Motława, Strzyża, Wisła |
+| kanal | 49 | +5-10% | Kanał Raduni, Czarna Łacha |
+| staw | 2,043 | +5% | Małe zbiorniki, oczka wodne |
+
+**Kluczowe wody Trójmiasta:**
+- **Morze:** Brzeźno, Jelitkowo, Sopot, Orłowo (linia brzegowa)
+- **Jeziora:** Osowskie (Osowa), Jasień, Wysockie (Gdynia), Straszyńskie
+- **Rzeki:** Radunia (główna), Motława (historyczna), Strzyża (zachodnie dzielnice)
+
+**Plik źródłowy:** `egib/data/processed/water_classified.gpkg`
+**Skrypt:** `egib/scripts/pipeline/11_classify_water.py`
 
 ### Ceny gruntów ✅ RAPORT 2025
 Zewnętrzne dane o cenach działek w Trójmieście: `docs/RAPORT_CENY_GRUNTOW_TROJMIASTO_2025.md`
@@ -151,10 +187,19 @@ Agent moja-dzialka to **wyspecjalizowany doradca nieruchomości**, który:
 
 | Komponent | Lokalizacja | Opis |
 |-----------|-------------|------|
-| SYSTEM_PROMPT | `backend/app/agent/orchestrator.py` | Pełna wiedza agenta (59 cech, ceny, strategia) |
-| Narzędzia agenta | `backend/app/agent/tools.py` | 26 narzędzi + get_district_prices, estimate_parcel_value |
+| SYSTEM_PROMPT | `backend/app/agent/orchestrator.py` | Pełna wiedza agenta (68 cech, ceny, wody, strategia) |
+| Narzędzia agenta | `backend/app/agent/tools.py` | **29 narzędzi** (było 26) + narzędzia wodne |
+| Graph service | `backend/app/services/graph_service.py` | Neo4j queries + **nowe metody wodne** |
 | Diversity service | `backend/app/services/diversity.py` | Wybór 3 różnorodnych propozycji |
 | Ceny dzielnic | `egib/scripts/pipeline/07a_district_prices.py` | Dane cenowe z raportu |
+
+### Nowe narzędzia wodne (2026-01-24)
+
+| Narzędzie | Opis |
+|-----------|------|
+| `search_by_water_type` | Wyszukaj działki blisko morza/jeziora/rzeki |
+| `get_water_info` | Odległości do wszystkich typów wód dla działki |
+| `get_parcel_full_context` | Pełny kontekst działki (woda + ceny + POG) |
 
 ### Wiedza agenta
 
@@ -262,14 +307,37 @@ DISCOVERY → SEARCH → EVALUATION → NEGOTIATION → LEAD_CAPTURE
 - Wizualizacja, GeoJSON
 - Tabele: `parcels`, `pog_zones`, `poi`
 
-### Neo4j
-- Graf wiedzy z relacjami
-- 10 typów węzłów, 12 typów relacji
-- Wyszukiwanie przez traversal
+### Neo4j ✅ NOWY SCHEMAT (2026-01-24)
 
-### Milvus
+**Węzły (15 typów):**
+| Typ | Liczba | Opis |
+|-----|--------|------|
+| Parcel | 154,959 | Działki z 68 właściwościami |
+| District | 109 | Dzielnice |
+| City | 3 | Gdańsk, Gdynia, Sopot |
+| School | 300 | Szkoły |
+| BusStop | 2,533 | Przystanki |
+| Forest | 3,410 | Tereny leśne |
+| Water | 2,307 | Obiekty wodne (sklasyfikowane) |
+| Shop | 8,332 | Sklepy |
+| Road | 1,918 | Drogi główne |
+| QuietnessCategory | 4 | bardzo_cicha, cicha, umiarkowana, glosna |
+| NatureCategory | 4 | bardzo_zielona, zielona, umiarkowana, zurbanizowana |
+| AccessCategory | 4 | doskonala, dobra, umiarkowana, ograniczona |
+| DensityCategory | 4 | gesta, umiarkowana, rzadka, bardzo_rzadka |
+| WaterType | 6 | morze, zatoka, rzeka, jezioro, kanal, staw |
+| PriceSegment | 6 | ULTRA_PREMIUM → ECONOMY |
+
+**Relacje (15 typów):**
+- Hierarchiczne: `LOCATED_IN`, `BELONGS_TO`, `HAS_POG`
+- Kategorialne: `HAS_QUIETNESS`, `HAS_NATURE`, `HAS_ACCESS`, `HAS_DENSITY`
+- Wodne: `NEAREST_WATER_TYPE`, `WATER_IS_TYPE`
+- Cenowe: `IN_PRICE_SEGMENT`
+
+### Milvus (opcjonalnie)
 - Embeddingi 32-dim
 - Wyszukiwanie podobieństwa
+- Można zastąpić Neo4j Vector Index
 
 Szczegóły: `docs/PLAN_V2.md` sekcja 3.
 
@@ -290,15 +358,24 @@ Szczegóły: `docs/PLAN_V2.md` sekcja 3.
 | 6 | `06_add_buildings.py` | Cechy zabudowy z BDOT10k |
 | 7a | `07a_district_prices.py` | Ceny dzielnic z raportu |
 
+### Neo4j Knowledge Graph Pipeline ✅ NOWE (2026-01-24)
+| Krok | Skrypt | Output |
+|------|--------|--------|
+| 11 | `11_classify_water.py` | 2,307 wód sklasyfikowanych → 6 typów |
+| 12 | `12_calculate_water_distances.py` | dist_to_sea/river/lake/canal/pond |
+| 13 | `13_export_full_csv.py` | `parcels_full.csv` (103 MB, 68 kolumn) |
+| 14 | `14_export_poi_csv.py` | 13 plików CSV dla Neo4j (104 MB) |
+| 15 | `15_create_neo4j_schema.py` | Indeksy, constraints, węzły kategorii |
+| 16 | `16_import_neo4j_full.py` | Import wszystkich danych do Neo4j |
+| 17 | `17_create_spatial_relations.py` | Relacje NEAR_*, segmenty cenowe |
+
 Lokalizacja skryptów: `egib/scripts/pipeline/`
 
 ### Do wykonania
 | Krok | Skrypt | Output |
 |------|--------|--------|
 | 7 | `07_import_postgis.py` | Import do PostgreSQL |
-| 8 | `08_import_neo4j.py` | Import do Neo4j |
-| 9 | `09_generate_embeddings.py` | Embeddingi 32-dim |
-| 10 | `10_import_milvus.py` | Import do Milvus |
+| 18 | `18_generate_embeddings.py` | Embeddingi 32-dim |
 
 ---
 
@@ -324,7 +401,7 @@ moja-dzialka/
 ├── egib/
 │   ├── data/processed/         # Przetworzone dane źródłowe
 │   ├── data/bdot10k_trojmiasto/# Wycięte warstwy BDOT10k
-│   └── scripts/pipeline/       # Aktualny pipeline (12 skryptów)
+│   └── scripts/pipeline/       # Aktualny pipeline (19 skryptów)
 ├── scripts/
 │   └── deploy/                 # Skrypty produkcyjne
 │       ├── deploy.sh           # Deployment
@@ -459,9 +536,10 @@ Lokalizacja: `/home/marcin/deepagents/`
 3. [x] ~~Architektura Software 3.0~~ (7-warstw pamięci, skills, state machine)
 4. [x] ~~Organizacja projektu~~ (dane w `data/ready-for-import/`, archiwum w `archive/`)
 5. [x] ~~Architektura deployment~~ (docker-compose.prod.yml, nginx, skrypty backup/restore)
-6. [ ] **TERAZ:** Deploy na serwer + import danych
-7. [ ] Testy E2E nowej architektury (API v2)
-8. [ ] Migracja frontendu na API v2
-9. [ ] Integracja płatności (Stripe)
-10. [ ] Lead capture UI + analytics
-11. [ ] Monitoring (Grafana + Prometheus)
+6. [x] ~~Neo4j Knowledge Graph Redesign~~ (klasyfikacja wód, 68 kolumn, nowe narzędzia)
+7. [ ] **TERAZ:** Deploy na serwer + import danych (uruchom skrypty 15, 16, 17)
+8. [ ] Testy E2E nowej architektury (API v2)
+9. [ ] Migracja frontendu na API v2
+10. [ ] Integracja płatności (Stripe)
+11. [ ] Lead capture UI + analytics
+12. [ ] Monitoring (Grafana + Prometheus)

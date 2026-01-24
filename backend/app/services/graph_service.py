@@ -35,6 +35,19 @@ POI_TYPES = ["school", "shop", "hospital", "bus_stop", "industrial"]
 MPZP_BUDOWLANE = ["MN", "MN/U", "MW", "MW/U", "U", "U/MN"]  # residential/commercial
 MPZP_NIEBUDOWLANE = ["R", "ZL", "ZP", "ZZ", "W", "WS"]  # agricultural, forest, green, water
 
+# Water types for Trójmiasto (priority order, premium factor)
+WATER_TYPES = {
+    "morze": {"name_pl": "Morze", "priority": 1, "premium_factor": 2.0, "threshold_m": 1000},
+    "zatoka": {"name_pl": "Zatoka", "priority": 2, "premium_factor": 1.8, "threshold_m": 1000},
+    "rzeka": {"name_pl": "Rzeka", "priority": 3, "premium_factor": 1.3, "threshold_m": 300},
+    "jezioro": {"name_pl": "Jezioro", "priority": 4, "premium_factor": 1.5, "threshold_m": 500},
+    "kanal": {"name_pl": "Kanał", "priority": 5, "premium_factor": 1.1, "threshold_m": 200},
+    "staw": {"name_pl": "Staw", "priority": 6, "premium_factor": 1.05, "threshold_m": 100},
+}
+
+# Price segments for districts
+PRICE_SEGMENTS = ["ULTRA_PREMIUM", "PREMIUM", "HIGH", "MEDIUM", "BUDGET", "ECONOMY"]
+
 
 @dataclass
 class ParcelSearchCriteria:
@@ -71,6 +84,13 @@ class ParcelSearchCriteria:
     max_dist_to_forest_m: Optional[int] = None
     max_dist_to_water_m: Optional[int] = None
     min_forest_pct_500m: Optional[float] = None  # e.g., 0.2 = 20% forest in 500m buffer
+
+    # Water type preferences (NEW for Neo4j redesign)
+    water_type: Optional[str] = None  # "morze", "jezioro", "rzeka", "kanal", "staw"
+    max_dist_to_sea_m: Optional[int] = None
+    max_dist_to_lake_m: Optional[int] = None
+    max_dist_to_river_m: Optional[int] = None
+    near_water_required: Optional[bool] = None  # True = must be near any water
 
     # MPZP (zoning)
     has_mpzp: Optional[bool] = None
@@ -1024,6 +1044,330 @@ class GraphService:
             return {"error": f"Parcel not found: {parcel_id}"}
         except Exception as e:
             logger.error(f"Get parcel neighborhood error: {e}")
+            return {"error": str(e)}
+
+    # =========================================================================
+    # WATER-RELATED METHODS (NEW - Neo4j Redesign)
+    # =========================================================================
+
+    async def search_parcels_by_water_type(
+        self,
+        water_type: str,
+        max_distance: int = 500,
+        city: Optional[str] = None,
+        min_area: Optional[int] = None,
+        max_area: Optional[int] = None,
+        is_built: Optional[bool] = None,
+        is_residential_zone: Optional[bool] = None,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for parcels near a specific type of water.
+
+        Args:
+            water_type: Type of water (morze, jezioro, rzeka, kanal, staw)
+            max_distance: Maximum distance in meters
+            city: Optional city filter (Gdańsk, Gdynia, Sopot)
+            min_area: Minimum parcel area in m2
+            max_area: Maximum parcel area in m2
+            is_built: Filter by built status
+            is_residential_zone: Filter by residential zoning
+            limit: Maximum results
+
+        Returns:
+            List of matching parcels with water info
+        """
+        # Map water_type to distance field
+        dist_field_map = {
+            "morze": "dist_to_sea",
+            "zatoka": "dist_to_sea",  # Same as sea
+            "rzeka": "dist_to_river",
+            "jezioro": "dist_to_lake",
+            "kanal": "dist_to_canal",
+            "staw": "dist_to_pond",
+        }
+
+        dist_field = dist_field_map.get(water_type, "dist_to_water")
+
+        # Build WHERE conditions
+        conditions = [f"p.{dist_field} IS NOT NULL", f"p.{dist_field} <= $max_distance"]
+
+        if city:
+            conditions.append("p.gmina = $city")
+        if min_area:
+            conditions.append("p.area_m2 >= $min_area")
+        if max_area:
+            conditions.append("p.area_m2 <= $max_area")
+        if is_built is not None:
+            conditions.append(f"p.is_built = {str(is_built).lower()}")
+        if is_residential_zone is not None:
+            conditions.append(f"p.is_residential_zone = {str(is_residential_zone).lower()}")
+
+        where_clause = " AND ".join(conditions)
+
+        query = f"""
+            MATCH (p:Parcel)
+            WHERE {where_clause}
+            RETURN
+                p.id_dzialki as id_dzialki,
+                p.gmina as gmina,
+                p.dzielnica as dzielnica,
+                p.area_m2 as area_m2,
+                p.{dist_field} as distance_to_water,
+                p.nearest_water_type as nearest_water_type,
+                p.is_built as is_built,
+                p.is_residential_zone as is_residential_zone,
+                p.quietness_score as quietness_score,
+                p.nature_score as nature_score,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
+                p.pog_symbol as pog_symbol,
+                p.price_segment as price_segment
+            ORDER BY p.{dist_field} ASC
+            LIMIT $limit
+        """
+
+        try:
+            results = await neo4j.run(query, {
+                "max_distance": max_distance,
+                "city": city,
+                "min_area": min_area,
+                "max_area": max_area,
+                "limit": limit,
+            })
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Search parcels by water type error: {e}")
+            return []
+
+    async def get_water_near_parcel(self, parcel_id: str) -> Dict[str, Any]:
+        """
+        Get information about all water bodies near a parcel.
+
+        Args:
+            parcel_id: ID of the parcel
+
+        Returns:
+            Dictionary with water distances and types
+        """
+        query = """
+            MATCH (p:Parcel {id_dzialki: $parcel_id})
+            RETURN
+                p.id_dzialki as id_dzialki,
+                p.dzielnica as dzielnica,
+
+                // All water distances
+                p.dist_to_sea as dist_to_sea,
+                p.dist_to_river as dist_to_river,
+                p.dist_to_lake as dist_to_lake,
+                p.dist_to_canal as dist_to_canal,
+                p.dist_to_pond as dist_to_pond,
+                p.dist_to_water as dist_to_water,
+
+                // Nearest water info
+                p.nearest_water_type as nearest_water_type,
+
+                // Proximity flags
+                p.near_morze as near_sea,
+                p.near_jezioro as near_lake,
+                p.near_rzeka as near_river
+        """
+
+        try:
+            results = await neo4j.run(query, {"parcel_id": parcel_id})
+            if results:
+                r = dict(results[0])
+
+                # Build water summary
+                water_info = []
+                if r.get("dist_to_sea") and r["dist_to_sea"] <= 5000:
+                    water_info.append(f"Morze: {r['dist_to_sea']}m")
+                if r.get("dist_to_lake") and r["dist_to_lake"] <= 3000:
+                    water_info.append(f"Jezioro: {r['dist_to_lake']}m")
+                if r.get("dist_to_river") and r["dist_to_river"] <= 2000:
+                    water_info.append(f"Rzeka: {r['dist_to_river']}m")
+                if r.get("dist_to_canal") and r["dist_to_canal"] <= 1000:
+                    water_info.append(f"Kanał: {r['dist_to_canal']}m")
+
+                r["water_summary"] = water_info if water_info else ["Brak wody w pobliżu"]
+                r["has_water_nearby"] = len(water_info) > 0
+
+                return r
+            return {"error": f"Parcel not found: {parcel_id}"}
+        except Exception as e:
+            logger.error(f"Get water near parcel error: {e}")
+            return {"error": str(e)}
+
+    async def get_parcel_full_context(self, parcel_id: str) -> Dict[str, Any]:
+        """
+        Get complete context for a parcel including all features.
+
+        Combines neighborhood, water, pricing, and POG information.
+
+        Args:
+            parcel_id: ID of the parcel
+
+        Returns:
+            Comprehensive parcel context for agent
+        """
+        query = """
+            MATCH (p:Parcel {id_dzialki: $parcel_id})
+
+            // Get category relations
+            OPTIONAL MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
+            OPTIONAL MATCH (p)-[:HAS_NATURE]->(nc:NatureCategory)
+            OPTIONAL MATCH (p)-[:HAS_ACCESS]->(ac:AccessCategory)
+            OPTIONAL MATCH (p)-[:HAS_DENSITY]->(dc:DensityCategory)
+            OPTIONAL MATCH (p)-[:NEAREST_WATER_TYPE]->(wt:WaterType)
+            OPTIONAL MATCH (p)-[:LOCATED_IN]->(d:District)
+            OPTIONAL MATCH (d)-[:IN_PRICE_SEGMENT]->(ps:PriceSegment)
+
+            RETURN
+                // Basic info
+                p.id_dzialki as id_dzialki,
+                p.gmina as gmina,
+                p.dzielnica as dzielnica,
+                p.area_m2 as area_m2,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
+
+                // Categories
+                qc.id as kategoria_ciszy,
+                qc.name_pl as kategoria_ciszy_pl,
+                nc.id as kategoria_natury,
+                nc.name_pl as kategoria_natury_pl,
+                ac.id as kategoria_dostepu,
+                ac.name_pl as kategoria_dostepu_pl,
+                dc.id as gestosc_zabudowy,
+                dc.name_pl as gestosc_zabudowy_pl,
+
+                // Scores
+                p.quietness_score as quietness_score,
+                p.nature_score as nature_score,
+                p.accessibility_score as accessibility_score,
+
+                // Building info
+                p.is_built as is_built,
+                p.building_count as building_count,
+                p.building_type as building_type,
+                p.building_coverage_pct as building_coverage_pct,
+
+                // POG (zoning)
+                p.pog_symbol as pog_symbol,
+                p.pog_nazwa as pog_nazwa,
+                p.pog_profil_podstawowy as pog_profil,
+                p.pog_maks_wysokosc_m as pog_max_wysokosc,
+                p.pog_maks_zabudowa_pct as pog_max_zabudowa,
+                p.is_residential_zone as is_residential_zone,
+
+                // Water info
+                p.nearest_water_type as nearest_water_type,
+                wt.name_pl as nearest_water_type_pl,
+                wt.premium_factor as water_premium_factor,
+                p.dist_to_sea as dist_to_sea,
+                p.dist_to_lake as dist_to_lake,
+                p.dist_to_river as dist_to_river,
+                p.dist_to_water as dist_to_water,
+
+                // Distances
+                p.dist_to_school as dist_to_school,
+                p.dist_to_bus_stop as dist_to_bus_stop,
+                p.dist_to_forest as dist_to_forest,
+                p.dist_to_supermarket as dist_to_supermarket,
+                p.dist_to_main_road as dist_to_main_road,
+
+                // Context
+                p.pct_forest_500m as pct_forest_500m,
+                p.count_buildings_500m as count_buildings_500m,
+
+                // Pricing
+                p.price_segment as price_segment,
+                ps.name_pl as price_segment_pl,
+                ps.price_min as price_min,
+                ps.price_max as price_max
+        """
+
+        try:
+            results = await neo4j.run(query, {"parcel_id": parcel_id})
+            if results:
+                r = dict(results[0])
+
+                # Build comprehensive summary
+                summary = {
+                    "lokalizacja": f"{r.get('dzielnica', '')}, {r.get('gmina', '')}",
+                    "powierzchnia": f"{r.get('area_m2', 0):,.0f} m²",
+                    "zabudowana": "Tak" if r.get("is_built") else "Nie",
+                    "strefa_mieszkaniowa": "Tak" if r.get("is_residential_zone") else "Nie",
+                    "cisza": f"{r.get('quietness_score', 0)}/100 ({r.get('kategoria_ciszy_pl', '')})",
+                    "natura": f"{r.get('nature_score', 0)}/100 ({r.get('kategoria_natury_pl', '')})",
+                    "dostepnosc": f"{r.get('accessibility_score', 0)}/100 ({r.get('kategoria_dostepu_pl', '')})",
+                }
+
+                # Water summary
+                if r.get("nearest_water_type"):
+                    water_dist = r.get(f"dist_to_{r['nearest_water_type']}", r.get("dist_to_water"))
+                    summary["najblizsa_woda"] = f"{r.get('nearest_water_type_pl', '')} ({water_dist}m)"
+
+                # Price estimate
+                if r.get("price_min") and r.get("price_max"):
+                    area = r.get("area_m2", 0)
+                    est_min = area * r["price_min"]
+                    est_max = area * r["price_max"]
+                    summary["szacunkowa_wartosc"] = f"{est_min/1000:.0f}k - {est_max/1000:.0f}k PLN"
+                    summary["segment_cenowy"] = r.get("price_segment_pl", "")
+
+                r["summary"] = summary
+                return r
+            return {"error": f"Parcel not found: {parcel_id}"}
+        except Exception as e:
+            logger.error(f"Get parcel full context error: {e}")
+            return {"error": str(e)}
+
+    async def get_water_statistics(self, city: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get statistics about water proximity for parcels.
+
+        Args:
+            city: Optional city filter
+
+        Returns:
+            Statistics about water proximity
+        """
+        city_filter = "WHERE p.gmina = $city" if city else ""
+
+        query = f"""
+            MATCH (p:Parcel)
+            {city_filter}
+            WITH p
+            RETURN
+                count(p) as total_parcels,
+
+                // Near sea
+                sum(CASE WHEN p.dist_to_sea <= 1000 THEN 1 ELSE 0 END) as near_sea_1km,
+                sum(CASE WHEN p.dist_to_sea <= 500 THEN 1 ELSE 0 END) as near_sea_500m,
+
+                // Near lake
+                sum(CASE WHEN p.dist_to_lake <= 500 THEN 1 ELSE 0 END) as near_lake_500m,
+                sum(CASE WHEN p.dist_to_lake <= 300 THEN 1 ELSE 0 END) as near_lake_300m,
+
+                // Near river
+                sum(CASE WHEN p.dist_to_river <= 300 THEN 1 ELSE 0 END) as near_river_300m,
+                sum(CASE WHEN p.dist_to_river <= 200 THEN 1 ELSE 0 END) as near_river_200m,
+
+                // By nearest water type
+                sum(CASE WHEN p.nearest_water_type = 'morze' THEN 1 ELSE 0 END) as nearest_sea,
+                sum(CASE WHEN p.nearest_water_type = 'jezioro' THEN 1 ELSE 0 END) as nearest_lake,
+                sum(CASE WHEN p.nearest_water_type = 'rzeka' THEN 1 ELSE 0 END) as nearest_river,
+                sum(CASE WHEN p.nearest_water_type = 'staw' THEN 1 ELSE 0 END) as nearest_pond
+        """
+
+        try:
+            results = await neo4j.run(query, {"city": city})
+            if results:
+                return dict(results[0])
+            return {}
+        except Exception as e:
+            logger.error(f"Get water statistics error: {e}")
             return {"error": str(e)}
 
 
