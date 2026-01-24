@@ -7,8 +7,8 @@
     <discovery_progress>
         Zbierz podstawowe informacje o użytkowniku:
         - Lokalizacja: {% if workflow.funnel_progress.location_collected %}✓ {{ workflow.funnel_progress.known_location }}{% else %}❌ (PRIORYTET){% endif %}
-        - Budżet: {% if workflow.funnel_progress.budget_collected %}✓ {{ workflow.funnel_progress.known_budget_max | format_price }}{% else %}❌{% endif %}
-        - Powierzchnia: {% if workflow.funnel_progress.size_collected %}✓ {{ workflow.funnel_progress.known_size_range }}{% else %}❌{% endif %}
+        {% if workflow.funnel_progress.budget_collected %}- Budżet: ✓ {{ workflow.funnel_progress.known_budget_max | format_price }}
+        {% endif %}- Powierzchnia: {% if workflow.funnel_progress.size_collected %}✓ {{ workflow.funnel_progress.known_size_range }}{% else %}❌{% endif %}
         - Preferencje: {% if workflow.funnel_progress.preferences_collected %}✓{% else %}❌{% endif %}
 
         {% if workflow.funnel_progress.is_ready_for_search() %}

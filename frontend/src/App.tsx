@@ -55,6 +55,10 @@ function App() {
 
     // Handle WebSocket events
     const unsubEvents = wsService.onEvent((event) => {
+      if (!event || !event.type) {
+        console.warn('[WS] Received invalid event:', event);
+        return;
+      }
       const parsed = parseWSEvent(event);
 
       switch (parsed.type) {
@@ -211,6 +215,43 @@ function App() {
           setAvatarMood('thinking');
           break;
 
+        case 'session':
+          // v2: Session initialized - store user_id/session_id if needed
+          if (event.data) {
+            const data = event.data as { user_id?: string; session_id?: string; state?: unknown };
+            console.log('[WS] Session initialized:', data.user_id, data.session_id);
+          }
+          break;
+
+        case 'skill_selected':
+          // v2: Skill selected by coordinator
+          {
+            const data = event.data as { skill?: string; phase?: string };
+            console.log('[WS] Skill selected:', data.skill, 'phase:', data.phase);
+            addActivity({
+              id: `skill-${Date.now()}`,
+              type: 'thinking',
+              message: `Faza: ${data.phase || 'unknown'}`,
+              details: `Skill: ${data.skill || 'unknown'}`,
+              timestamp: new Date(),
+            });
+          }
+          break;
+
+        case 'done':
+          // v2: Processing complete
+          {
+            const data = event.data as { phase?: string; engagement?: string };
+            console.log('[WS] Done, phase:', data.phase, 'engagement:', data.engagement);
+            // Finish any streaming message
+            const { currentStreamingId } = useChatStore.getState();
+            if (currentStreamingId) {
+              finishStreaming();
+            }
+            setAvatarMood('idle');
+          }
+          break;
+
         case 'error':
           addActivity({
             id: `error-${Date.now()}`,
@@ -264,6 +305,10 @@ function App() {
             setError(data.message || 'Błąd przetwarzania LiDAR');
           }
           break;
+
+        default:
+          // Unknown event type - log but don't throw
+          console.debug('[WS] Unhandled event type:', parsed.type);
       }
     });
 

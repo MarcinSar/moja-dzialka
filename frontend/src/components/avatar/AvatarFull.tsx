@@ -37,7 +37,7 @@ function generateBlobPath(complexity: number, variance: number, phase: number, t
 }
 
 // Flowing particles that orbit around
-function FlowingParticles({ mood, count = 24 }: { mood: AvatarMood; count?: number }) {
+function FlowingParticles({ mood = 'idle', count = 24 }: { mood: AvatarMood; count?: number }) {
   const isActive = mood !== 'idle';
   const isExcited = mood === 'excited';
 
@@ -130,7 +130,7 @@ function AudioWaves({ isActive }: { isActive: boolean }) {
 }
 
 // Main organic blob with mouse interaction
-function OrganicBlob({ mood }: { mood: AvatarMood }) {
+function OrganicBlob({ mood = 'idle' }: { mood: AvatarMood }) {
   const blobControls = useAnimation();
   const coreControls = useAnimation();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -329,11 +329,11 @@ function OrganicBlob({ mood }: { mood: AvatarMood }) {
         <motion.circle
           cx="100"
           cy="100"
-          r="95"
           fill="none"
           stroke={gradientColors[0]}
           strokeWidth="0.5"
           strokeOpacity={isHovered ? 0.4 : 0.2}
+          initial={{ r: 95 }}
           animate={{
             r: isHovered ? [95, 98, 95] : 95,
           }}
@@ -354,10 +354,9 @@ function OrganicBlob({ mood }: { mood: AvatarMood }) {
         <motion.ellipse
           cx="85"
           cy="85"
-          rx="25"
-          ry="20"
           fill="white"
           fillOpacity={0.15}
+          initial={{ rx: 25, ry: 20 }}
           animate={{
             rx: [25, 28, 25],
             ry: [20, 22, 20],
@@ -369,12 +368,12 @@ function OrganicBlob({ mood }: { mood: AvatarMood }) {
         <motion.circle
           cx="100"
           cy="100"
-          r="50"
           fill="none"
           stroke={gradientColors[0]}
           strokeWidth="1.5"
           strokeOpacity={0.3}
           strokeDasharray="8 4"
+          initial={{ r: 50 }}
           animate={{
             rotate: isThinking ? 360 : isHovered ? 180 : 0,
             r: isSpeaking ? [50, 55, 50] : 50,
@@ -462,7 +461,7 @@ function OrganicBlob({ mood }: { mood: AvatarMood }) {
 }
 
 export function AvatarFull() {
-  const mood = useUIPhaseStore((s) => s.avatarMood);
+  const mood = useUIPhaseStore((s) => s.avatarMood) || 'idle';
 
   return (
     <motion.div

@@ -1,10 +1,12 @@
 # CLAUDE.md - Projekt moja-dzialka
 
-## Status: NEO4J KNOWLEDGE GRAPH REDESIGN ZAIMPLEMENTOWANY (2026-01-24)
+## Status: AGENT V2 - STYL KONWERSACJI UPROSZCZONY (2026-01-24)
 
 Agent z 7-warstwowym modelem pamięci, skills registry i state machine routing.
-**NOWE:** Pełna klasyfikacja wód (6 typów), 68 kolumn działek, narzędzia wodne.
-Pełna wiedza o 155k działkach. API v1 (legacy) + API v2 (nowa architektura).
+**UKOŃCZONE:** Neo4j Knowledge Graph (154,959 działek), graph_service.py przepisany.
+**NOWE:** Uproszczony styl konwersacji (krótkie odpowiedzi, budżet opcjonalny, bez powtórzeń).
+**NAPRAWIONE:** Skill routing (discovery → search transition), rozpoznawanie potwierdzenia użytkownika.
+API v1 (legacy) + API v2 (nowa architektura).
 Szczegółowy plan: `docs/PLAN_V2.md`, `docs/PLAN_V3_CONSOLIDATED.md`
 
 ---
@@ -178,7 +180,7 @@ Zewnętrzne dane o cenach działek w Trójmieście: `docs/RAPORT_CENY_GRUNTOW_TR
 
 Agent moja-dzialka to **wyspecjalizowany doradca nieruchomości**, który:
 - Rozmawia naturalnie, jak kompetentny znajomy z branży
-- Zna dogłębnie 155k działek i 59 cech każdej z nich
+- Zna dogłębnie 155k działek i **68 cech** każdej z nich
 - Wie kiedy użyć której bazy danych i dlaczego
 - Doradza, rekomenduje, wyjaśnia trade-offy
 - Dostosowuje formę do użytkownika
@@ -203,21 +205,23 @@ Agent moja-dzialka to **wyspecjalizowany doradca nieruchomości**, który:
 
 ### Wiedza agenta
 
-**59 cech działek w 8 kategoriach:**
-1. Lokalizacja (7 cech) - gmina, dzielnica, współrzędne
-2. Własność (3 cechy) - typ, grupa rejestrowa
-3. Powierzchnia (5 cech) - area_m2, size_category, shape_index
-4. Zabudowa (11 cech) - is_built, building_count, building_type
-5. Planowanie POG (11 cech) - symbol, profil, parametry zabudowy
-6. Odległości (13 cech) - do szkoły, lasu, wody, przystanku
-7. Wskaźniki (3 cechy) - quietness, nature, accessibility (0-100)
-8. Kontekst okolicy (3 cechy) - pct_forest_500m, count_buildings_500m
+**68 cech działek w 9 kategoriach:**
+1. **Identyfikacja (6)** - id_dzialki, gmina, dzielnica, miejscowosc, powiat, wojewodztwo
+2. **Geometria (10)** - area_m2, bbox_*, shape_index, size_category, centroid_*, embedding
+3. **Własność (3)** - typ_wlasnosci, grupa_rej, grupa_rej_nazwa
+4. **Zabudowa (8)** - is_built, building_count, building_coverage_pct, building_max_floors...
+5. **POG (13)** - has_pog, pog_symbol, pog_nazwa, pog_profil_*, pog_maks_*, is_residential_zone
+6. **Odległości POI (9)** - dist_to_school, dist_to_bus_stop, dist_to_supermarket, dist_to_doctors...
+7. **Odległości wody (7)** - dist_to_water, dist_to_sea, dist_to_river, dist_to_lake, nearest_water_type...
+8. **Wskaźniki (3)** - quietness_score, nature_score, accessibility_score (0-100)
+9. **Kontekst (3)** - pct_forest_500m, pct_water_500m, count_buildings_500m
+10. **Kategorie binned (4)** - kategoria_ciszy, kategoria_natury, kategoria_dostepu, gestosc_zabudowy
 
-**Kategorie binned (do Neo4j):**
-- `kategoria_ciszy`: bardzo_cicha, cicha, umiarkowana, glosna
-- `kategoria_natury`: bardzo_zielona, zielona, umiarkowana, zurbanizowana
-- `kategoria_dostepu`: doskonala, dobra, umiarkowana, ograniczona
-- `gestosc_zabudowy`: gesta, umiarkowana, rzadka, bardzo_rzadka
+**Kategorie binned (wartości):**
+- `kategoria_ciszy`: bardzo_cicha (39), cicha (2,661), umiarkowana (10,576), glosna (141,683)
+- `kategoria_natury`: bardzo_zielona (76,609), zielona (78,324), umiarkowana (21), zurbanizowana (5)
+- `kategoria_dostepu`: doskonala (136,796), dobra (11,686), umiarkowana (5,087), ograniczona (1,390)
+- `gestosc_zabudowy`: gesta (147,502), umiarkowana (4,201), rzadka (1,993), bardzo_rzadka (1,263)
 
 **Ceny dzielnic:**
 - 50+ dzielnic z cenami min/max/segment
@@ -307,32 +311,130 @@ DISCOVERY → SEARCH → EVALUATION → NEGOTIATION → LEAD_CAPTURE
 - Wizualizacja, GeoJSON
 - Tabele: `parcels`, `pog_zones`, `poi`
 
-### Neo4j ✅ NOWY SCHEMAT (2026-01-24)
+### Neo4j ✅ SCHEMAT ZWERYFIKOWANY (2026-01-24)
+
+**Statystyki grafu:**
+```
+Parcels: 154,959 | Cities: 3 | Districts: 138
+Waters: 521 | Schools: 60 | BusStops: 339
+```
 
 **Węzły (15 typów):**
-| Typ | Liczba | Opis |
-|-----|--------|------|
-| Parcel | 154,959 | Działki z 68 właściwościami |
-| District | 109 | Dzielnice |
-| City | 3 | Gdańsk, Gdynia, Sopot |
-| School | 300 | Szkoły |
-| BusStop | 2,533 | Przystanki |
-| Forest | 3,410 | Tereny leśne |
-| Water | 2,307 | Obiekty wodne (sklasyfikowane) |
-| Shop | 8,332 | Sklepy |
-| Road | 1,918 | Drogi główne |
-| QuietnessCategory | 4 | bardzo_cicha, cicha, umiarkowana, glosna |
-| NatureCategory | 4 | bardzo_zielona, zielona, umiarkowana, zurbanizowana |
-| AccessCategory | 4 | doskonala, dobra, umiarkowana, ograniczona |
-| DensityCategory | 4 | gesta, umiarkowana, rzadka, bardzo_rzadka |
-| WaterType | 6 | morze, zatoka, rzeka, jezioro, kanal, staw |
-| PriceSegment | 6 | ULTRA_PREMIUM → ECONOMY |
+| Typ | Liczba | Właściwości |
+|-----|--------|-------------|
+| Parcel | 154,959 | 68 właściwości (pełna lista poniżej) |
+| District | 138 | `name`, `city`, `gmina` |
+| City | 3 | `name` (Gdańsk, Gdynia, Sopot) |
+| School | 60 | id, geometry |
+| BusStop | 339 | id, geometry |
+| Water | 521 | id, type, geometry |
+| QuietnessCategory | 4 | `id`, `score_min` |
+| NatureCategory | 4 | `id`, `score_min` |
+| AccessCategory | 4 | `id`, `score_min` |
+| DensityCategory | 4 | `id` |
+| WaterType | 6 | `id`, `premium_factor`, `priority` |
+| PriceSegment | 6 | `id` |
 
-**Relacje (15 typów):**
-- Hierarchiczne: `LOCATED_IN`, `BELONGS_TO`, `HAS_POG`
-- Kategorialne: `HAS_QUIETNESS`, `HAS_NATURE`, `HAS_ACCESS`, `HAS_DENSITY`
-- Wodne: `NEAREST_WATER_TYPE`, `WATER_IS_TYPE`
-- Cenowe: `IN_PRICE_SEGMENT`
+**Właściwości Parcel (68 kolumn):**
+```
+# Identyfikacja
+id_dzialki, gmina, dzielnica, miejscowosc, powiat, wojewodztwo
+
+# Geometria
+area_m2, bbox_height, bbox_width, shape_index, size_category
+centroid_lat, centroid_lon, centroid_x, centroid_y, embedding
+
+# Własność
+grupa_rej, grupa_rej_nazwa, typ_wlasnosci
+
+# Zabudowa
+is_built, building_count, building_area_m2, building_coverage_pct
+building_max_floors, has_residential, has_industrial, under_construction
+
+# POG (planowanie)
+has_pog, pog_symbol, pog_nazwa, pog_oznaczenie
+pog_profil_podstawowy, pog_profil_podstawowy_nazwy
+pog_profil_dodatkowy, pog_profil_dodatkowy_nazwy
+pog_maks_intensywnosc, pog_maks_wysokosc_m, pog_maks_zabudowa_pct, pog_min_bio_pct
+is_residential_zone
+
+# Odległości do POI
+dist_to_school, dist_to_bus_stop, dist_to_supermarket
+dist_to_doctors, dist_to_pharmacy, dist_to_kindergarten
+dist_to_restaurant, dist_to_industrial, dist_to_main_road
+
+# Odległości do natury
+dist_to_forest, dist_to_water
+dist_to_sea, dist_to_river, dist_to_lake, dist_to_canal, dist_to_pond
+nearest_water_type
+
+# Wskaźniki kompozytowe (0-100)
+quietness_score, nature_score, accessibility_score
+
+# Kategorie binned
+kategoria_ciszy, kategoria_natury, kategoria_dostepu, gestosc_zabudowy
+
+# Kontekst okolicy (500m buffer)
+pct_forest_500m, pct_water_500m, count_buildings_500m
+```
+
+**UWAGA:** Właściwości które NIE ISTNIEJĄ (usunięte z graph_service.py):
+- `has_public_road_access` - zastąpione przez `dist_to_main_road < 50`
+- `price_segment` na Parcel - tylko na PriceSegment node
+- `name_pl` na kategoriach - używamy `id`
+
+**Relacje:**
+| Relacja | Od → Do | Opis |
+|---------|---------|------|
+| `LOCATED_IN` | Parcel → District | Działka w dzielnicy |
+| `BELONGS_TO` | District → City | Dzielnica w mieście |
+| `HAS_QUIETNESS` | Parcel → QuietnessCategory | Kategoria ciszy |
+| `HAS_NATURE` | Parcel → NatureCategory | Kategoria natury |
+| `HAS_ACCESS` | Parcel → AccessCategory | Kategoria dostępności |
+| `HAS_DENSITY` | Parcel → DensityCategory | Gęstość zabudowy |
+
+### GraphService ✅ ZAKTUALIZOWANY (2026-01-24)
+
+Plik: `backend/app/services/graph_service.py`
+
+**Zaktualizowane metody:**
+
+| Metoda | Opis | Status |
+|--------|------|--------|
+| `search_parcels()` | Główne wyszukiwanie działek | ✅ Przepisana |
+| `get_parcel_neighborhood()` | Kontekst sąsiedztwa działki | ✅ Przepisana |
+| `get_parcel_full_context()` | Pełny kontekst działki | ✅ Przepisana |
+| `get_all_gminy()` | Lista miast | ✅ Zaktualizowana |
+| `get_miejscowosci_in_gmina()` | Dzielnice w mieście | ✅ Zaktualizowana |
+| `get_children_in_hierarchy()` | Hierarchia City→District | ✅ Zaktualizowana |
+| `get_graph_stats()` | Statystyki grafu | ✅ Zaktualizowana |
+| `get_water_near_parcel()` | Odległości do wód | ✅ Zaktualizowana |
+| `find_parcels_by_mpzp()` | Wyszukaj po pog_symbol | ✅ Zaktualizowana |
+| `find_buildable_parcels()` | Działki budowlane | ✅ Zaktualizowana |
+
+**Kluczowe zmiany:**
+1. `MATCH (d:Dzialka)` → `MATCH (p:Parcel)`
+2. Relacje `W_GMINIE`, `W_MIEJSCOWOSCI` → właściwości `p.gmina`, `p.dzielnica`
+3. Relacje `MA_CISZE` → `HAS_QUIETNESS`, `KategoriaCiszy` → `QuietnessCategory`
+4. Odległości z relacji → właściwości na Parcel (np. `p.dist_to_school`)
+5. `c.name IN $cats` → `c.id IN $cats`
+6. `s.budowlany = true` → `p.is_residential_zone = true`
+
+**Przykład zapytania search_parcels:**
+```cypher
+MATCH (p:Parcel)
+MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
+WHERE p.gmina = $gmina AND qc.id IN $quietness_cats
+RETURN p.id_dzialki, p.quietness_score, p.dzielnica...
+ORDER BY p.quietness_score DESC
+LIMIT $limit
+```
+
+**Testy (wszystkie przechodzą):**
+- `get_all_gminy()` → `['Gdańsk', 'Gdynia', 'Sopot']`
+- `search_parcels(gmina='Gdańsk', quietness=['cicha'])` → 3 wyniki
+- `get_parcel_neighborhood(id)` → 7 elementów w summary
+- `get_graph_stats()` → 154,959 działek, 3 miasta, 138 dzielnic
 
 ### Milvus (opcjonalnie)
 - Embeddingi 32-dim
@@ -444,29 +546,42 @@ Pełna dokumentacja: `docs/DEPLOYMENT.md`
 ┌─────────────────────────────────────────────────────────────┐
 │  Nginx (:80/:443) → reverse proxy                           │
 ├─────────────────────────────────────────────────────────────┤
-│  Docker Network                                             │
+│  Docker Network: moja-dzialka-network                       │
 │  ┌─────────┐ ┌─────────┐ ┌────────┐ ┌────────┐ ┌────────┐   │
 │  │ Backend │ │Frontend │ │ Celery │ │ Redis  │ │ Mongo  │   │
 │  │ :8000   │ │ :3000   │ │ Worker │ │ :6379  │ │ :27017 │   │
+│  │ Py 3.11 │ │ Nginx   │ │        │ │ 7-alp  │ │ 7.0    │   │
 │  └─────────┘ └─────────┘ └────────┘ └────────┘ └────────┘   │
-│  ┌─────────┐ ┌─────────┐ ┌────────┐                         │
-│  │PostGIS  │ │ Neo4j   │ │ Milvus │                         │
-│  │ :5432   │ │ :7687   │ │ :19530 │                         │
-│  └─────────┘ └─────────┘ └────────┘                         │
+│  ┌─────────┐ ┌─────────┐                                    │
+│  │PostGIS  │ │ Neo4j   │                                    │
+│  │ :5432   │ │ :7687   │                                    │
+│  │ 16-3.4  │ │5.15+APOC│                                    │
+│  └─────────┘ └─────────┘                                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Alokacja RAM (32 GB)
+**Dockerfiles:**
+- `backend/Dockerfile` - Python 3.11-slim + GDAL/GEOS, uvicorn (dev) / gunicorn (prod)
+- `frontend/Dockerfile` - Node 20 build → nginx:alpine serve
 
-| Usługa | RAM | Uzasadnienie |
-|--------|-----|--------------|
-| Neo4j | 8-10 GB | Graf 155k działek |
-| PostgreSQL | 4-6 GB | Spatial queries |
-| Milvus | 4-6 GB | Vector search |
-| Backend | 2-4 GB | API + Claude calls |
-| Redis | 1-2 GB | Session cache |
-| MongoDB | 1-2 GB | Leads |
-| System | 4-6 GB | OS + Nginx |
+**Użycie:**
+```bash
+docker compose up -d                           # Dev (hot reload)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d  # Prod
+```
+
+### Alokacja RAM (32 GB) - docker-compose.prod.yml
+
+| Usługa | Limit | Reserved | Uzasadnienie |
+|--------|-------|----------|--------------|
+| Neo4j | 10 GB | 6 GB | Graf 155k działek, heap 6G + pagecache 2G |
+| PostgreSQL | 6 GB | 4 GB | Spatial queries, shared_buffers 2G |
+| Backend | 4 GB | 2 GB | API + Claude calls + gunicorn 4 workers |
+| Redis | 2 GB | 1 GB | Session cache, maxmemory 1G |
+| MongoDB | 2 GB | 1 GB | Leads, sessions |
+| Celery | 2 GB | 1 GB | Background tasks |
+| Frontend | 512 MB | - | Static files via nginx |
+| System | 4-6 GB | - | OS + reverse proxy |
 
 ### Skrypty operacyjne
 
@@ -481,9 +596,93 @@ Pełna dokumentacja: `docs/DEPLOYMENT.md`
 
 | Plik | Opis |
 |------|------|
-| `docker-compose.prod.yml` | Limity RAM, gunicorn, restart policy |
+| `docker-compose.yml` | Pełny stack: bazy + backend + frontend + celery |
+| `docker-compose.prod.yml` | Override: limity RAM, gunicorn, logging |
+| `backend/Dockerfile` | Python 3.11 + GDAL, non-root user |
+| `frontend/Dockerfile` | Node 20 build → nginx serve |
+| `frontend/nginx.conf` | SPA routing, gzip, cache static |
 | `nginx/moja-dzialka.conf` | Reverse proxy, SSL, rate limiting |
-| `.env.example` | Template zmiennych środowiskowych |
+
+**Zmienne środowiskowe:**
+| Zmienna | Default | Opis |
+|---------|---------|------|
+| `POSTGRES_PASSWORD` | `secret` | Hasło PostgreSQL |
+| `NEO4J_PASSWORD` | `secretpassword` | Hasło Neo4j |
+| `ANTHROPIC_API_KEY` | - | Klucz API Claude |
+| `PERSISTENCE_BACKEND` | `redis` (dev) / `redis_postgres` (prod) | Backend persystencji |
+
+---
+
+## Changelog
+
+### 2026-01-24: Uproszczony styl konwersacji + naprawiony skill routing
+
+**Problem 1:** Agent był zbyt gadatliwy - zasypywał użytkownika informacjami o cenach, budżecie i wielu pytaniami naraz.
+
+**Rozwiązanie:**
+- Zredukowano prime directives z 6 do 4 (BREVITY_FIRST, ACCURACY, NATURAL_FRIEND, ONE_TOPIC)
+- Budżet jest teraz opcjonalny (nie wymagany do wyszukiwania)
+- Usunięto proaktywne podawanie cen - tylko na pytanie
+- Skrócono format prezentacji wyników (1 linia per działka)
+- Zredukowano highlights z 4 do 2
+
+**Pliki zmienione:**
+- `backend/app/memory/schemas/core.py` - nowe dyrektywy
+- `backend/app/skills/templates/discovery.j2` - budżet opcjonalny, bez proaktywnych cen
+- `backend/app/skills/templates/search.j2` - krótszy format, instrukcje o filtrach
+- `backend/app/engine/tool_executor.py` - mniej highlights, diagnostyka pustych wyników
+
+---
+
+**Problem 2:** Agent utknął w pętli - ciągle wywoływał `propose_search_preferences` zamiast przejść do `approve_search_preferences` → `execute_search`.
+
+**Przyczyna:** `is_ready_for_search()` nie sprawdzało `preferences_proposed`, więc skill routing zawsze wracał do "discovery".
+
+**Rozwiązanie:**
+1. `workflow.py`: `is_ready_for_search()` teraz sprawdza również `self.preferences_proposed`
+2. `search.j2`: Dodano jawne instrukcje rozpoznawania potwierdzenia ("tak", "ok", "zgoda" → natychmiast `approve_search_preferences`)
+
+**Flow po naprawie:**
+```
+User: "szukam działki w Jasieniu"
+→ skill=discovery → propose_search_preferences → preferences_proposed=True
+User: "tak"
+→ skill=search (is_ready_for_search=True) → approve_search_preferences → execute_search
+```
+
+---
+
+### 2026-01-24: graph_service.py dostosowany do nowego schematu
+
+**Problem:** `graph_service.py` używał starego schematu Neo4j (`Dzialka`, `MA_CISZE`, `W_GMINIE`) który nie istniał. Wyszukiwanie zwracało 0 wyników.
+
+**Rozwiązanie:** Przepisano wszystkie metody dla nowego schematu:
+
+| Stare | Nowe |
+|-------|------|
+| `Dzialka` node | `Parcel` node |
+| `W_GMINIE` relation | `p.gmina` property |
+| `MA_CISZE` → `KategoriaCiszy` | `HAS_QUIETNESS` → `QuietnessCategory` |
+| `c.name IN $cats` | `c.id IN $cats` |
+| `s.budowlany = true` | `p.is_residential_zone = true` |
+| `BLISKO_SZKOLY` relation | `p.dist_to_school` property |
+
+**Usunięte nieistniejące właściwości:**
+- `has_public_road_access` → zastąpione `dist_to_main_road < 50`
+- `price_segment` na Parcel
+- `name_pl` na kategoriach (QuietnessCategory, etc.)
+- `price_min`, `price_max` na District
+
+**Zaktualizowane metody:**
+- `search_parcels()` - główne wyszukiwanie
+- `get_parcel_neighborhood()` - kontekst działki
+- `get_parcel_full_context()` - pełne dane
+- `get_all_gminy()`, `get_miejscowosci_in_gmina()`
+- `get_children_in_hierarchy()`, `get_graph_stats()`
+- `find_parcels_by_mpzp()`, `find_buildable_parcels()`
+- `get_water_near_parcel()`
+
+**Wynik:** Wszystkie testy przechodzą bez warningów.
 
 ---
 
@@ -531,15 +730,28 @@ Lokalizacja: `/home/marcin/deepagents/`
 
 ## Następne kroki
 
-1. [x] ~~Pipeline danych - przetwarzanie~~ (154,959 działek z 59 cechami)
+### Ukończone ✅
+1. [x] ~~Pipeline danych - przetwarzanie~~ (154,959 działek z 68 cechami)
 2. [x] ~~Agent-Doradca v1~~ (SYSTEM_PROMPT, narzędzia, diversity service)
 3. [x] ~~Architektura Software 3.0~~ (7-warstw pamięci, skills, state machine)
 4. [x] ~~Organizacja projektu~~ (dane w `data/ready-for-import/`, archiwum w `archive/`)
 5. [x] ~~Architektura deployment~~ (docker-compose.prod.yml, nginx, skrypty backup/restore)
 6. [x] ~~Neo4j Knowledge Graph Redesign~~ (klasyfikacja wód, 68 kolumn, nowe narzędzia)
-7. [ ] **TERAZ:** Deploy na serwer + import danych (uruchom skrypty 15, 16, 17)
-8. [ ] Testy E2E nowej architektury (API v2)
-9. [ ] Migracja frontendu na API v2
-10. [ ] Integracja płatności (Stripe)
-11. [ ] Lead capture UI + analytics
-12. [ ] Monitoring (Grafana + Prometheus)
+7. [x] ~~graph_service.py dostosowany do nowego schematu~~ (2026-01-24)
+   - Wszystkie metody przepisane dla Parcel nodes
+   - Właściwości zamiast relacji dla odległości
+   - Kategorie przez relacje HAS_QUIETNESS, HAS_NATURE, etc.
+   - Testy przechodzą, brak warningów
+
+### W trakcie 🔄
+8. [ ] **TERAZ:** Testy E2E wyszukiwania przez agenta
+   - Sprawdzić czy execute_search zwraca wyniki
+   - Przetestować różne kryteria wyszukiwania
+   - Zweryfikować prezentację wyników
+
+### Do zrobienia 📋
+9. [ ] Deploy na serwer produkcyjny (Hetzner)
+10. [ ] Migracja frontendu na API v2
+11. [ ] Integracja płatności (Stripe)
+12. [ ] Lead capture UI + analytics
+13. [ ] Monitoring (Grafana + Prometheus)

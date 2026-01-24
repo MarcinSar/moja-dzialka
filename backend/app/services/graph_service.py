@@ -132,29 +132,24 @@ class GraphService:
 
     async def get_gmina_info(self, gmina_name: str) -> Optional[GminaInfo]:
         """
-        Get information about a gmina including statistics.
+        Get information about a gmina (city) including statistics.
+
+        NEW schema: gmina is a property on Parcel, not a separate node.
 
         Args:
-            gmina_name: Name of the gmina
+            gmina_name: Name of the gmina (Gdańsk, Gdynia, or Sopot)
 
         Returns:
             GminaInfo or None
         """
         query = """
-            MATCH (g:Gmina {name: $gmina})
-            OPTIONAL MATCH (g)-[:W_POWIECIE]->(p:Powiat)
-            OPTIONAL MATCH (d:Dzialka)-[:W_GMINIE]->(g)
-            WITH g, p.name as powiat, collect(d) as dzialki
-            RETURN
-                g.name as name,
-                powiat,
-                size(dzialki) as parcel_count,
-                CASE WHEN size(dzialki) > 0
-                    THEN reduce(s = 0.0, d IN dzialki | s + coalesce(d.area_m2, 0.0)) / size(dzialki)
-                    ELSE null END as avg_area,
-                CASE WHEN size(dzialki) > 0
-                    THEN toFloat(size([d IN dzialki WHERE d.has_mpzp = true])) / size(dzialki) * 100
-                    ELSE null END as pct_with_mpzp
+            MATCH (p:Parcel)
+            WHERE p.gmina = $gmina
+            WITH p.gmina as name,
+                 count(p) as parcel_count,
+                 avg(p.area_m2) as avg_area,
+                 toFloat(sum(CASE WHEN p.pog_symbol IS NOT NULL THEN 1 ELSE 0 END)) / count(p) * 100 as pct_with_mpzp
+            RETURN name, parcel_count, avg_area, pct_with_mpzp
         """
 
         try:
@@ -163,7 +158,7 @@ class GraphService:
                 r = results[0]
                 return GminaInfo(
                     name=r["name"],
-                    powiat=r.get("powiat"),
+                    powiat="Trójmiasto",  # Fixed for this region
                     parcel_count=r.get("parcel_count", 0),
                     avg_area=r.get("avg_area"),
                     pct_with_mpzp=r.get("pct_with_mpzp"),
@@ -174,28 +169,35 @@ class GraphService:
             return None
 
     async def get_all_gminy(self) -> List[str]:
-        """Get list of all gminy names."""
+        """Get list of all gminy (cities) names.
+
+        NEW schema: gmina is a property on Parcel, use DISTINCT.
+        """
         query = """
-            MATCH (g:Gmina)
-            RETURN g.name as name
-            ORDER BY g.name
+            MATCH (p:Parcel)
+            RETURN DISTINCT p.gmina as name
+            ORDER BY name
         """
         try:
             results = await neo4j.run(query)
-            return [r["name"] for r in results]
+            return [r["name"] for r in results if r["name"]]
         except Exception as e:
             logger.error(f"Get all gminy error: {e}")
             return []
 
     async def get_miejscowosci_in_gmina(self, gmina_name: str) -> List[Dict[str, Any]]:
-        """Get all miejscowosci (localities) in a gmina."""
+        """Get all districts (dzielnice) in a gmina (city).
+
+        NEW schema: District nodes connected to City via BELONGS_TO.
+        District has: name, city, gmina
+        """
         query = """
-            MATCH (m:Miejscowosc)-[:W_GMINIE]->(g:Gmina {name: $gmina})
-            OPTIONAL MATCH (d:Dzialka)-[:W_MIEJSCOWOSCI]->(m)
-            WITH m, count(d) as parcel_count
+            MATCH (d:District)-[:BELONGS_TO]->(c:City {name: $gmina})
+            OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(d)
+            WITH d, count(p) as parcel_count
             RETURN
-                m.name as name,
-                m.rodzaj as rodzaj,
+                d.name as name,
+                d.city as city,
                 parcel_count
             ORDER BY parcel_count DESC
         """
@@ -207,16 +209,20 @@ class GraphService:
             return []
 
     async def get_mpzp_symbols(self) -> List[MPZPInfo]:
-        """Get all MPZP zoning symbols with statistics."""
+        """Get all POG zoning symbols with statistics.
+
+        NEW schema: pog_symbol is a property on Parcel.
+        """
         query = """
-            MATCH (s:SymbolMPZP)
-            OPTIONAL MATCH (d:Dzialka)-[:MA_PRZEZNACZENIE]->(s)
-            WITH s, count(d) as parcel_count
-            RETURN
-                s.kod as symbol,
-                s.nazwa as nazwa,
-                s.budowlany as budowlany,
-                parcel_count
+            MATCH (p:Parcel)
+            WHERE p.pog_symbol IS NOT NULL
+            WITH p.pog_symbol as symbol,
+                 p.pog_nazwa as nazwa,
+                 p.is_residential_zone as is_residential,
+                 count(p) as parcel_count
+            RETURN symbol, head(collect(nazwa)) as nazwa,
+                   any(x IN collect(is_residential) WHERE x = true) as budowlany,
+                   sum(parcel_count) as parcel_count
             ORDER BY parcel_count DESC
         """
         try:
@@ -224,7 +230,7 @@ class GraphService:
             return [
                 MPZPInfo(
                     symbol=r["symbol"],
-                    nazwa=r["nazwa"],
+                    nazwa=r.get("nazwa", ""),
                     budowlany=r.get("budowlany", False),
                     parcel_count=r.get("parcel_count", 0),
                 )
@@ -238,27 +244,25 @@ class GraphService:
         """
         Get contextual information about a parcel from the graph.
 
-        Includes administrative hierarchy, MPZP info, and neighborhood.
+        NEW schema: Properties on Parcel, District via LOCATED_IN.
         """
         query = """
-            MATCH (d:Dzialka {id_dzialki: $parcel_id})
-            OPTIONAL MATCH (d)-[:W_GMINIE]->(g:Gmina)
-            OPTIONAL MATCH (d)-[:W_MIEJSCOWOSCI]->(m:Miejscowosc)
-            OPTIONAL MATCH (d)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)
-            OPTIONAL MATCH (g)-[:W_POWIECIE]->(p:Powiat)
+            MATCH (p:Parcel {id_dzialki: $parcel_id})
+            OPTIONAL MATCH (p)-[:LOCATED_IN]->(d:District)
+            OPTIONAL MATCH (d)-[:BELONGS_TO]->(c:City)
             RETURN
-                d.id_dzialki as id,
-                d.area_m2 as area_m2,
-                d.quietness_score as quietness,
-                d.nature_score as nature,
-                d.accessibility_score as accessibility,
-                d.has_mpzp as has_mpzp,
-                g.name as gmina,
-                m.name as miejscowosc,
-                p.name as powiat,
-                s.kod as mpzp_symbol,
-                s.nazwa as mpzp_nazwa,
-                s.budowlany as mpzp_budowlany
+                p.id_dzialki as id,
+                p.area_m2 as area_m2,
+                p.quietness_score as quietness,
+                p.nature_score as nature,
+                p.accessibility_score as accessibility,
+                p.pog_symbol IS NOT NULL as has_mpzp,
+                p.gmina as gmina,
+                p.dzielnica as miejscowosc,
+                'Trójmiasto' as powiat,
+                p.pog_symbol as mpzp_symbol,
+                p.pog_nazwa as mpzp_nazwa,
+                p.is_residential_zone as mpzp_budowlany
         """
         try:
             results = await neo4j.run(query, {"parcel_id": parcel_id})
@@ -276,45 +280,42 @@ class GraphService:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """
-        Find parcels with specific MPZP zoning.
+        Find parcels with specific POG zoning symbol.
+
+        NEW schema: pog_symbol is a property on Parcel.
 
         Args:
-            symbol: MPZP symbol (e.g., "MN", "U")
+            symbol: POG symbol (e.g., "MN", "U")
             gmina: Optional gmina filter
             limit: Max results
 
         Returns:
             List of parcel dictionaries
         """
+        conditions = ["p.pog_symbol = $symbol"]
+        params = {"symbol": symbol, "limit": limit}
+
         if gmina:
-            query = """
-                MATCH (d:Dzialka)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP {kod: $symbol})
-                WHERE d.gmina = $gmina
-                RETURN
-                    d.id_dzialki as id,
-                    d.area_m2 as area_m2,
-                    d.gmina as gmina,
-                    d.quietness_score as quietness,
-                    d.centroid_lat as lat,
-                    d.centroid_lon as lon
-                ORDER BY d.quietness_score DESC
-                LIMIT $limit
-            """
-            params = {"symbol": symbol, "gmina": gmina, "limit": limit}
-        else:
-            query = """
-                MATCH (d:Dzialka)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP {kod: $symbol})
-                RETURN
-                    d.id_dzialki as id,
-                    d.area_m2 as area_m2,
-                    d.gmina as gmina,
-                    d.quietness_score as quietness,
-                    d.centroid_lat as lat,
-                    d.centroid_lon as lon
-                ORDER BY d.quietness_score DESC
-                LIMIT $limit
-            """
-            params = {"symbol": symbol, "limit": limit}
+            conditions.append("p.gmina = $gmina")
+            params["gmina"] = gmina
+
+        where_clause = " AND ".join(conditions)
+
+        query = f"""
+            MATCH (p:Parcel)
+            WHERE {where_clause}
+            RETURN
+                p.id_dzialki as id,
+                p.area_m2 as area_m2,
+                p.gmina as gmina,
+                p.dzielnica as dzielnica,
+                p.quietness_score as quietness,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
+                p.is_residential_zone as is_residential_zone
+            ORDER BY p.quietness_score DESC
+            LIMIT $limit
+        """
 
         try:
             results = await neo4j.run(query, params)
@@ -331,7 +332,9 @@ class GraphService:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """
-        Find parcels with buildable MPZP zoning.
+        Find parcels with buildable (residential) zoning.
+
+        NEW schema: is_residential_zone is a property on Parcel.
 
         Args:
             gmina: Optional gmina filter
@@ -342,37 +345,38 @@ class GraphService:
         Returns:
             List of parcel dictionaries
         """
-        conditions = ["s.budowlany = true"]
+        conditions = ["p.is_residential_zone = true"]
         params = {"limit": limit}
 
         if gmina:
-            conditions.append("d.gmina = $gmina")
+            conditions.append("p.gmina = $gmina")
             params["gmina"] = gmina
 
         if min_area:
-            conditions.append("d.area_m2 >= $min_area")
+            conditions.append("p.area_m2 >= $min_area")
             params["min_area"] = min_area
 
         if max_area:
-            conditions.append("d.area_m2 <= $max_area")
+            conditions.append("p.area_m2 <= $max_area")
             params["max_area"] = max_area
 
         where_clause = " AND ".join(conditions)
 
         query = f"""
-            MATCH (d:Dzialka)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)
+            MATCH (p:Parcel)
             WHERE {where_clause}
             RETURN
-                d.id_dzialki as id,
-                d.area_m2 as area_m2,
-                d.gmina as gmina,
-                d.miejscowosc as miejscowosc,
-                d.quietness_score as quietness,
-                d.nature_score as nature,
-                s.kod as mpzp_symbol,
-                d.centroid_lat as lat,
-                d.centroid_lon as lon
-            ORDER BY d.quietness_score DESC
+                p.id_dzialki as id,
+                p.area_m2 as area_m2,
+                p.gmina as gmina,
+                p.dzielnica as miejscowosc,
+                p.quietness_score as quietness,
+                p.nature_score as nature,
+                p.pog_symbol as mpzp_symbol,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
+                p.is_built as is_built
+            ORDER BY p.quietness_score DESC
             LIMIT $limit
         """
 
@@ -385,38 +389,61 @@ class GraphService:
 
     async def get_administrative_tree(self) -> Dict[str, Any]:
         """
-        Get full administrative hierarchy tree.
+        Get administrative hierarchy tree.
 
-        Returns nested structure: Wojewodztwo -> Powiaty -> Gminy
+        NEW schema: City -> Districts (via BELONGS_TO relation).
+        Returns: {cities: [{name, districts: [{name, parcel_count}]}]}
         """
         query = """
-            MATCH (w:Wojewodztwo)<-[:W_WOJEWODZTWIE]-(p:Powiat)<-[:W_POWIECIE]-(g:Gmina)
-            WITH w, p, collect(g.name) as gminy
-            WITH w, collect({powiat: p.name, gminy: gminy}) as powiaty
-            RETURN w.name as wojewodztwo, powiaty
+            MATCH (c:City)
+            OPTIONAL MATCH (d:District)-[:BELONGS_TO]->(c)
+            OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(d)
+            WITH c, d, count(p) as parcel_count
+            WITH c, collect({name: d.name, parcel_count: parcel_count}) as districts
+            RETURN c.name as city, districts
+            ORDER BY c.name
         """
         try:
             results = await neo4j.run(query)
             if results:
-                return dict(results[0])
+                return {
+                    "region": "Trójmiasto",
+                    "cities": [
+                        {"name": r["city"], "districts": r["districts"]}
+                        for r in results
+                    ]
+                }
             return {}
         except Exception as e:
             logger.error(f"Get administrative tree error: {e}")
             return {}
 
     async def get_graph_stats(self) -> Dict[str, Any]:
-        """Get statistics about the knowledge graph."""
+        """Get statistics about the knowledge graph.
+
+        NEW schema: Parcel, City, District, Water, POI nodes.
+        """
         query = """
-            MATCH (d:Dzialka) WITH count(d) as dzialki
-            MATCH (g:Gmina) WITH dzialki, count(g) as gminy
-            MATCH (m:Miejscowosc) WITH dzialki, gminy, count(m) as miejscowosci
-            MATCH (s:SymbolMPZP) WITH dzialki, gminy, miejscowosci, count(s) as symbole
-            RETURN dzialki, gminy, miejscowosci, symbole
+            MATCH (p:Parcel) WITH count(p) as parcels
+            MATCH (c:City) WITH parcels, count(c) as cities
+            MATCH (d:District) WITH parcels, cities, count(d) as districts
+            MATCH (w:Water) WITH parcels, cities, districts, count(w) as waters
+            MATCH (s:School) WITH parcels, cities, districts, waters, count(s) as schools
+            MATCH (bs:BusStop) WITH parcels, cities, districts, waters, schools, count(bs) as bus_stops
+            RETURN parcels, cities, districts, waters, schools, bus_stops
         """
         try:
             results = await neo4j.run(query)
             if results:
-                return dict(results[0])
+                r = results[0]
+                return {
+                    "parcels": r.get("parcels", 0),
+                    "cities": r.get("cities", 0),
+                    "districts": r.get("districts", 0),
+                    "waters": r.get("waters", 0),
+                    "schools": r.get("schools", 0),
+                    "bus_stops": r.get("bus_stops", 0),
+                }
             return {}
         except Exception as e:
             logger.error(f"Get graph stats error: {e}")
@@ -434,8 +461,10 @@ class GraphService:
         """
         PRIMARY search function using Neo4j graph relationships.
 
-        This should be the main source of truth for finding parcels.
-        Uses rich relationships to filter by all available criteria.
+        Uses the NEW schema (2026-01-24):
+        - Parcel nodes with properties (gmina, dzielnica, etc.)
+        - Category relations: HAS_QUIETNESS, HAS_NATURE, HAS_ACCESS, HAS_DENSITY
+        - Distance properties directly on Parcel nodes
 
         Args:
             criteria: ParcelSearchCriteria with all search dimensions
@@ -444,141 +473,149 @@ class GraphService:
             List of parcel dictionaries with full details
         """
         # Build dynamic Cypher query based on criteria
-        match_clauses = ["MATCH (d:Dzialka)"]
+        match_clauses = ["MATCH (p:Parcel)"]
         where_conditions = []
         params = {"limit": criteria.limit}
 
-        # Location filters
+        # Location filters - now properties on Parcel
         if criteria.gmina:
-            match_clauses.append("MATCH (d)-[:W_GMINIE]->(g:Gmina {name: $gmina})")
+            where_conditions.append("p.gmina = $gmina")
             params["gmina"] = criteria.gmina
 
         if criteria.miejscowosc:
-            match_clauses.append("MATCH (d)-[:W_MIEJSCOWOSCI]->(m:Miejscowosc {name: $miejscowosc})")
-            params["miejscowosc"] = criteria.miejscowosc
+            # miejscowosc is now 'dzielnica' in new schema
+            where_conditions.append("p.dzielnica = $dzielnica")
+            params["dzielnica"] = criteria.miejscowosc
 
-        if criteria.powiat:
-            match_clauses.append("""
-                MATCH (d)-[:W_GMINIE]->(g:Gmina)-[:W_POWIECIE]->(p:Powiat {name: $powiat})
-            """)
-            params["powiat"] = criteria.powiat
+        # powiat is no longer stored - Trójmiasto is single area, skip this filter
 
-        # Area filters (direct property or via category relationship)
+        # Area filters (direct properties)
         if criteria.min_area_m2:
-            where_conditions.append("d.area_m2 >= $min_area")
+            where_conditions.append("p.area_m2 >= $min_area")
             params["min_area"] = criteria.min_area_m2
 
         if criteria.max_area_m2:
-            where_conditions.append("d.area_m2 <= $max_area")
+            where_conditions.append("p.area_m2 <= $max_area")
             params["max_area"] = criteria.max_area_m2
 
         if criteria.area_category:
-            match_clauses.append("MATCH (d)-[:MA_POWIERZCHNIE]->(ap:KategoriaPowierzchni)")
-            where_conditions.append("ap.name IN $area_categories")
+            # Area category is now size_category property
+            where_conditions.append("p.size_category IN $area_categories")
             params["area_categories"] = criteria.area_category
 
-        # Character & Environment filters (via relationships)
-        if criteria.charakter_terenu:
-            match_clauses.append("MATCH (d)-[:MA_CHARAKTER]->(ch:CharakterTerenu)")
-            where_conditions.append("ch.name IN $charakter")
-            params["charakter"] = criteria.charakter_terenu
+        # Character filters - charakter_terenu not available in new schema
+        # Skip criteria.charakter_terenu
 
+        # Category filters via relationships (NEW schema)
         if criteria.quietness_categories:
-            match_clauses.append("MATCH (d)-[:MA_CISZE]->(c:KategoriaCiszy)")
-            where_conditions.append("c.name IN $quietness_cats")
+            match_clauses.append("MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)")
+            where_conditions.append("qc.id IN $quietness_cats")
             params["quietness_cats"] = criteria.quietness_categories
 
         if criteria.nature_categories:
-            match_clauses.append("MATCH (d)-[:MA_NATURE]->(n:KategoriaNatury)")
-            where_conditions.append("n.name IN $nature_cats")
+            match_clauses.append("MATCH (p)-[:HAS_NATURE]->(nc:NatureCategory)")
+            where_conditions.append("nc.id IN $nature_cats")
             params["nature_cats"] = criteria.nature_categories
 
         if criteria.building_density:
-            match_clauses.append("MATCH (d)-[:MA_ZABUDOWE]->(z:GestoscZabudowy)")
-            where_conditions.append("z.name IN $density")
+            match_clauses.append("MATCH (p)-[:HAS_DENSITY]->(dc:DensityCategory)")
+            where_conditions.append("dc.id IN $density")
             params["density"] = criteria.building_density
 
         # Accessibility filters
         if criteria.accessibility_categories:
-            match_clauses.append("MATCH (d)-[:MA_DOSTEP]->(acc:KategoriaDostepu)")
-            where_conditions.append("acc.name IN $access_cats")
+            match_clauses.append("MATCH (p)-[:HAS_ACCESS]->(ac:AccessCategory)")
+            where_conditions.append("ac.id IN $access_cats")
             params["access_cats"] = criteria.accessibility_categories
 
+        # has_road_access property not available in current schema
+        # Could use dist_to_main_road < threshold as proxy if needed
         if criteria.has_road_access is not None:
-            where_conditions.append("d.has_public_road_access = $has_road")
-            params["has_road"] = criteria.has_road_access
+            # Using dist_to_main_road < 50m as proxy for road access
+            if criteria.has_road_access:
+                where_conditions.append("p.dist_to_main_road < 50")
+            else:
+                where_conditions.append("p.dist_to_main_road >= 50")
 
-        # POI proximity filters (using relationship properties)
+        # POI proximity filters - now properties on Parcel
         if criteria.max_dist_to_school_m:
-            match_clauses.append("""
-                MATCH (d)-[rs:BLISKO_SZKOLY]->(poi_school:POIType {name: 'school'})
-            """)
-            where_conditions.append("rs.distance_m <= $max_school_dist")
+            where_conditions.append("p.dist_to_school <= $max_school_dist")
             params["max_school_dist"] = criteria.max_dist_to_school_m
 
         if criteria.max_dist_to_shop_m:
-            match_clauses.append("""
-                MATCH (d)-[rsh:BLISKO_SKLEPU]->(poi_shop:POIType {name: 'shop'})
-            """)
-            where_conditions.append("rsh.distance_m <= $max_shop_dist")
+            where_conditions.append("p.dist_to_supermarket <= $max_shop_dist")
             params["max_shop_dist"] = criteria.max_dist_to_shop_m
 
         if criteria.max_dist_to_bus_stop_m:
-            match_clauses.append("""
-                MATCH (d)-[rb:BLISKO_PRZYSTANKU]->(poi_bus:POIType {name: 'bus_stop'})
-            """)
-            where_conditions.append("rb.distance_m <= $max_bus_dist")
+            where_conditions.append("p.dist_to_bus_stop <= $max_bus_dist")
             params["max_bus_dist"] = criteria.max_dist_to_bus_stop_m
 
         if criteria.max_dist_to_hospital_m:
-            match_clauses.append("""
-                MATCH (d)-[rh:BLISKO_SZPITALA]->(poi_hosp:POIType {name: 'hospital'})
-            """)
-            where_conditions.append("rh.distance_m <= $max_hospital_dist")
+            where_conditions.append("p.dist_to_doctors <= $max_hospital_dist")
             params["max_hospital_dist"] = criteria.max_dist_to_hospital_m
 
-        # Nature proximity filters
+        # Nature proximity filters - now properties
         if criteria.max_dist_to_forest_m:
-            match_clauses.append("""
-                MATCH (d)-[rf:BLISKO_LASU]->(lc_forest:LandCoverType {name: 'forest'})
-            """)
-            where_conditions.append("rf.distance_m <= $max_forest_dist")
+            where_conditions.append("p.dist_to_forest <= $max_forest_dist")
             params["max_forest_dist"] = criteria.max_dist_to_forest_m
 
         if criteria.max_dist_to_water_m:
-            match_clauses.append("""
-                MATCH (d)-[rw:BLISKO_WODY]->(lc_water:LandCoverType {name: 'water'})
-            """)
-            where_conditions.append("rw.distance_m <= $max_water_dist")
+            where_conditions.append("p.dist_to_water <= $max_water_dist")
             params["max_water_dist"] = criteria.max_dist_to_water_m
 
         if criteria.min_forest_pct_500m:
-            where_conditions.append("d.pct_forest_500m >= $min_forest_pct")
+            where_conditions.append("p.pct_forest_500m >= $min_forest_pct")
             params["min_forest_pct"] = criteria.min_forest_pct_500m
 
-        # Industrial distance (for quiet areas - want to be FAR from industrial)
+        # Industrial distance - property
         if criteria.min_dist_to_industrial_m:
-            match_clauses.append("""
-                MATCH (d)-[ri:BLISKO_PRZEMYSLU]->(poi_ind:POIType {name: 'industrial'})
-            """)
-            where_conditions.append("ri.distance_m >= $min_industrial_dist")
+            where_conditions.append("p.dist_to_industrial >= $min_industrial_dist")
             params["min_industrial_dist"] = criteria.min_dist_to_industrial_m
 
-        # MPZP filters
-        if criteria.has_mpzp is not None:
-            where_conditions.append("d.has_mpzp = $has_mpzp")
-            params["has_mpzp"] = criteria.has_mpzp
+        # Water type filters (NEW)
+        if criteria.water_type:
+            dist_field_map = {
+                "morze": "dist_to_sea",
+                "zatoka": "dist_to_sea",
+                "rzeka": "dist_to_river",
+                "jezioro": "dist_to_lake",
+                "kanal": "dist_to_canal",
+                "staw": "dist_to_pond",
+            }
+            dist_field = dist_field_map.get(criteria.water_type, "dist_to_water")
+            threshold = WATER_TYPES.get(criteria.water_type, {}).get("threshold_m", 500)
+            where_conditions.append(f"p.{dist_field} <= $water_threshold")
+            params["water_threshold"] = threshold
 
-        # Only check buildable if we're not explicitly filtering out MPZP
-        if criteria.mpzp_buildable and criteria.has_mpzp is not False:
-            match_clauses.append("MATCH (d)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)")
-            where_conditions.append("s.budowlany = true")
+        if criteria.max_dist_to_sea_m:
+            where_conditions.append("p.dist_to_sea <= $max_sea_dist")
+            params["max_sea_dist"] = criteria.max_dist_to_sea_m
+
+        if criteria.max_dist_to_lake_m:
+            where_conditions.append("p.dist_to_lake <= $max_lake_dist")
+            params["max_lake_dist"] = criteria.max_dist_to_lake_m
+
+        if criteria.max_dist_to_river_m:
+            where_conditions.append("p.dist_to_river <= $max_river_dist")
+            params["max_river_dist"] = criteria.max_dist_to_river_m
+
+        if criteria.near_water_required:
+            where_conditions.append("p.dist_to_water <= 500")
+
+        # POG/MPZP filters - now properties on Parcel
+        if criteria.has_mpzp is not None:
+            # has_mpzp is now represented by pog_symbol being NOT NULL
+            if criteria.has_mpzp:
+                where_conditions.append("p.pog_symbol IS NOT NULL")
+            else:
+                where_conditions.append("p.pog_symbol IS NULL")
+
+        if criteria.mpzp_buildable:
+            where_conditions.append("p.is_residential_zone = true")
 
         if criteria.mpzp_symbols:
-            if "MATCH (d)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)" not in "\n".join(match_clauses):
-                match_clauses.append("MATCH (d)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)")
-            where_conditions.append("s.kod IN $mpzp_symbols")
-            params["mpzp_symbols"] = criteria.mpzp_symbols
+            where_conditions.append("p.pog_symbol IN $pog_symbols")
+            params["pog_symbols"] = criteria.mpzp_symbols
 
         # Build WHERE clause
         where_clause = ""
@@ -586,7 +623,7 @@ class GraphService:
             where_clause = "WHERE " + " AND ".join(where_conditions)
 
         # Sorting
-        sort_field = f"d.{criteria.sort_by}" if criteria.sort_by else "d.quietness_score"
+        sort_field = f"p.{criteria.sort_by}" if criteria.sort_by else "p.quietness_score"
         sort_dir = "DESC" if criteria.sort_desc else "ASC"
 
         # Build full query
@@ -594,25 +631,31 @@ class GraphService:
             {chr(10).join(match_clauses)}
             {where_clause}
             RETURN DISTINCT
-                d.id_dzialki as id,
-                d.gmina as gmina,
-                d.miejscowosc as miejscowosc,
-                d.area_m2 as area_m2,
-                d.quietness_score as quietness_score,
-                d.nature_score as nature_score,
-                d.accessibility_score as accessibility_score,
-                d.has_mpzp as has_mpzp,
-                d.mpzp_symbol as mpzp_symbol,
-                d.centroid_lat as lat,
-                d.centroid_lon as lon,
-                d.dist_to_forest as dist_to_forest,
-                d.dist_to_water as dist_to_water,
-                d.dist_to_school as dist_to_school,
-                d.dist_to_shop as dist_to_shop,
-                d.dist_to_bus_stop as dist_to_bus_stop,
-                d.pct_forest_500m as pct_forest_500m,
-                d.count_buildings_500m as count_buildings_500m,
-                d.has_public_road_access as has_road_access
+                p.id_dzialki as id,
+                p.gmina as gmina,
+                p.dzielnica as miejscowosc,
+                p.area_m2 as area_m2,
+                p.quietness_score as quietness_score,
+                p.nature_score as nature_score,
+                p.accessibility_score as accessibility_score,
+                p.pog_symbol IS NOT NULL as has_mpzp,
+                p.pog_symbol as mpzp_symbol,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
+                p.dist_to_forest as dist_to_forest,
+                p.dist_to_water as dist_to_water,
+                p.dist_to_school as dist_to_school,
+                p.dist_to_supermarket as dist_to_shop,
+                p.dist_to_bus_stop as dist_to_bus_stop,
+                p.pct_forest_500m as pct_forest_500m,
+                p.count_buildings_500m as count_buildings_500m,
+                p.is_built as is_built,
+                p.is_residential_zone as is_residential_zone,
+                p.nearest_water_type as nearest_water_type,
+                p.dist_to_sea as dist_to_sea,
+                p.kategoria_ciszy as kategoria_ciszy,
+                p.kategoria_natury as kategoria_natury,
+                p.gestosc_zabudowy as gestosc_zabudowy
             ORDER BY {sort_field} {sort_dir}
             LIMIT $limit
         """
@@ -671,41 +714,46 @@ class GraphService:
         """
         Get summary of available data for agent context.
 
+        NEW schema: Uses HAS_QUIETNESS, HAS_NATURE, etc. relations.
         Returns statistics and available options for each dimension.
         """
         query = """
             // Count parcels by quietness category
-            MATCH (d:Dzialka)-[:MA_CISZE]->(c:KategoriaCiszy)
-            WITH c.name as category, count(d) as count
+            MATCH (p:Parcel)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
+            WITH qc.id as category, count(p) as count
             WITH collect({category: category, count: count}) as quietness_stats
 
             // Count parcels by nature category
-            MATCH (d:Dzialka)-[:MA_NATURE]->(n:KategoriaNatury)
-            WITH quietness_stats, n.name as category, count(d) as count
+            MATCH (p:Parcel)-[:HAS_NATURE]->(nc:NatureCategory)
+            WITH quietness_stats, nc.id as category, count(p) as count
             WITH quietness_stats, collect({category: category, count: count}) as nature_stats
 
-            // Count parcels by character
-            MATCH (d:Dzialka)-[:MA_CHARAKTER]->(ch:CharakterTerenu)
-            WITH quietness_stats, nature_stats, ch.name as category, count(d) as count
-            WITH quietness_stats, nature_stats, collect({category: category, count: count}) as charakter_stats
+            // Count parcels by density category
+            MATCH (p:Parcel)-[:HAS_DENSITY]->(dc:DensityCategory)
+            WITH quietness_stats, nature_stats, dc.id as category, count(p) as count
+            WITH quietness_stats, nature_stats, collect({category: category, count: count}) as density_stats
 
-            // Count by gmina
-            MATCH (d:Dzialka)-[:W_GMINIE]->(g:Gmina)
-            WITH quietness_stats, nature_stats, charakter_stats, g.name as gmina, count(d) as count
-            WITH quietness_stats, nature_stats, charakter_stats, collect({gmina: gmina, count: count}) as gmina_stats
+            // Count by gmina (city)
+            MATCH (p:Parcel)
+            WITH quietness_stats, nature_stats, density_stats,
+                 p.gmina as gmina, count(p) as count
+            WITH quietness_stats, nature_stats, density_stats,
+                 collect({gmina: gmina, count: count}) as gmina_stats
 
-            // MPZP stats
-            MATCH (d:Dzialka)
-            WITH quietness_stats, nature_stats, charakter_stats, gmina_stats,
-                 sum(CASE WHEN d.has_mpzp = true THEN 1 ELSE 0 END) as with_mpzp,
-                 count(d) as total
+            // POG/MPZP stats
+            MATCH (p:Parcel)
+            WITH quietness_stats, nature_stats, density_stats, gmina_stats,
+                 sum(CASE WHEN p.pog_symbol IS NOT NULL THEN 1 ELSE 0 END) as with_mpzp,
+                 sum(CASE WHEN p.is_residential_zone = true THEN 1 ELSE 0 END) as residential_zone,
+                 count(p) as total
 
             RETURN
                 quietness_stats,
                 nature_stats,
-                charakter_stats,
+                density_stats,
                 gmina_stats,
                 with_mpzp,
+                residential_zone,
                 total
         """
 
@@ -716,9 +764,10 @@ class GraphService:
                 return {
                     "total_parcels": r.get("total", 0),
                     "with_mpzp": r.get("with_mpzp", 0),
+                    "residential_zone": r.get("residential_zone", 0),
                     "quietness_distribution": r.get("quietness_stats", []),
                     "nature_distribution": r.get("nature_stats", []),
-                    "character_distribution": r.get("charakter_stats", []),
+                    "density_distribution": r.get("density_stats", []),
                     "gmina_distribution": r.get("gmina_stats", []),
                     "available_categories": {
                         "quietness": KATEGORIE_CISZY,
@@ -726,12 +775,13 @@ class GraphService:
                         "accessibility": KATEGORIE_DOSTEPU,
                         "area": KATEGORIE_POWIERZCHNI,
                         "density": GESTOSC_ZABUDOWY,
-                        "character": CHARAKTER_TERENU,
                     },
                     "mpzp_info": {
                         "buildable_symbols": MPZP_BUDOWLANE,
                         "non_buildable_symbols": MPZP_NIEBUDOWLANE,
-                    }
+                    },
+                    "water_types": list(WATER_TYPES.keys()),
+                    "price_segments": PRICE_SEGMENTS,
                 }
             return {}
         except Exception as e:
@@ -750,61 +800,50 @@ class GraphService:
         """
         Get children in administrative hierarchy.
 
+        NEW schema: City -> District (via BELONGS_TO).
+
         Args:
-            level: "wojewodztwo" → returns powiaty
-                   "powiat" → returns gminy in powiat
-                   "gmina" → returns miejscowości in gmina
-            parent_name: Optional name of parent unit (required for powiat/gmina level)
+            level: "region" → returns cities (Gdańsk, Gdynia, Sopot)
+                   "city" → returns districts in city
+            parent_name: Name of parent unit (required for city level)
 
         Returns:
             List of children with counts
         """
         try:
-            if level == "wojewodztwo":
-                # Return all powiaty in pomorskie
+            if level == "region":
+                # Return all cities in Trójmiasto
                 query = """
-                    MATCH (p:Powiat)-[:W_WOJEWODZTWIE]->(w:Wojewodztwo)
-                    OPTIONAL MATCH (g:Gmina)-[:W_POWIECIE]->(p)
-                    OPTIONAL MATCH (d:Dzialka)-[:W_GMINIE]->(g)
-                    WITH p, count(DISTINCT g) as gminy_count, count(DISTINCT d) as parcel_count
+                    MATCH (c:City)
+                    OPTIONAL MATCH (d:District)-[:BELONGS_TO]->(c)
+                    OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(d)
+                    WITH c, count(DISTINCT d) as district_count, count(DISTINCT p) as parcel_count
                     RETURN
-                        p.name as name,
-                        gminy_count,
+                        c.name as name,
+                        district_count,
                         parcel_count
-                    ORDER BY p.name
+                    ORDER BY c.name
                 """
                 results = await neo4j.run(query)
                 return [dict(r) for r in results]
 
-            elif level == "powiat" and parent_name:
-                # Return gminy in given powiat
+            elif level == "city" and parent_name:
+                # Return districts in given city
                 query = """
-                    MATCH (g:Gmina)-[:W_POWIECIE]->(p:Powiat {name: $parent})
-                    OPTIONAL MATCH (d:Dzialka)-[:W_GMINIE]->(g)
-                    WITH g, count(d) as parcel_count
+                    MATCH (d:District)-[:BELONGS_TO]->(c:City {name: $parent})
+                    OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(d)
+                    WITH d, count(p) as parcel_count
                     RETURN
-                        g.name as name,
+                        d.name as name,
                         parcel_count
-                    ORDER BY g.name
+                    ORDER BY parcel_count DESC, d.name
                 """
                 results = await neo4j.run(query, {"parent": parent_name})
                 return [dict(r) for r in results]
 
+            # Legacy support: gmina = city
             elif level == "gmina" and parent_name:
-                # Return miejscowości in given gmina
-                query = """
-                    MATCH (m:Miejscowosc)-[:W_GMINIE]->(g:Gmina {name: $parent})
-                    OPTIONAL MATCH (d:Dzialka)-[:W_MIEJSCOWOSCI]->(m)
-                    OPTIONAL MATCH (m)-[:MA_RODZAJ]->(r:RodzajMiejscowosci)
-                    WITH m, r, count(d) as parcel_count
-                    RETURN
-                        m.name as name,
-                        r.name as rodzaj,
-                        parcel_count
-                    ORDER BY parcel_count DESC, m.name
-                """
-                results = await neo4j.run(query, {"parent": parent_name})
-                return [dict(r) for r in results]
+                return await self.get_children_in_hierarchy("city", parent_name)
 
             else:
                 return []
@@ -813,90 +852,86 @@ class GraphService:
             logger.error(f"Get children in hierarchy error: {e}")
             return []
 
-    async def get_all_powiaty(self) -> List[str]:
-        """Get list of all powiat names."""
+    async def get_all_cities(self) -> List[str]:
+        """Get list of all city names.
+
+        NEW schema: City nodes instead of Powiat.
+        """
         query = """
-            MATCH (p:Powiat)
-            RETURN p.name as name
-            ORDER BY p.name
+            MATCH (c:City)
+            RETURN c.name as name
+            ORDER BY c.name
         """
         try:
             results = await neo4j.run(query)
             return [r["name"] for r in results]
         except Exception as e:
-            logger.error(f"Get all powiaty error: {e}")
+            logger.error(f"Get all cities error: {e}")
             return []
+
+    async def get_all_powiaty(self) -> List[str]:
+        """Legacy method - returns cities instead of powiaty."""
+        return await self.get_all_cities()
 
     async def get_area_category_stats(
         self,
         gmina: Optional[str] = None,
-        powiat: Optional[str] = None
+        dzielnica: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Get distribution of parcels by category in given area.
 
-        Returns counts for: quietness, nature, accessibility, MPZP, etc.
+        NEW schema: Uses HAS_QUIETNESS, HAS_NATURE, HAS_DENSITY relations.
 
         Args:
-            gmina: Optional gmina filter
-            powiat: Optional powiat filter
+            gmina: Optional city filter (Gdańsk, Gdynia, Sopot)
+            dzielnica: Optional district filter
 
         Returns:
             Dictionary with category distributions
         """
         # Build location filter
-        location_filter = ""
+        conditions = []
         params = {}
 
         if gmina:
-            location_filter = "MATCH (d)-[:W_GMINIE]->(g:Gmina {name: $gmina})"
+            conditions.append("p.gmina = $gmina")
             params["gmina"] = gmina
-        elif powiat:
-            location_filter = """
-                MATCH (d)-[:W_GMINIE]->(g:Gmina)-[:W_POWIECIE]->(p:Powiat {name: $powiat})
-            """
-            params["powiat"] = powiat
+        if dzielnica:
+            conditions.append("p.dzielnica = $dzielnica")
+            params["dzielnica"] = dzielnica
 
-        # Complex query to get all category distributions
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        # Simpler query - aggregate directly
         query = f"""
-            MATCH (d:Dzialka)
-            {location_filter}
-            WITH d
+            MATCH (p:Parcel)
+            {where_clause}
+            WITH count(p) as total,
+                 sum(CASE WHEN p.pog_symbol IS NOT NULL THEN 1 ELSE 0 END) as with_mpzp,
+                 sum(CASE WHEN p.is_residential_zone = true THEN 1 ELSE 0 END) as residential,
+                 sum(CASE WHEN p.has_public_road_access = true THEN 1 ELSE 0 END) as with_road_access,
+                 sum(CASE WHEN p.is_built = true THEN 1 ELSE 0 END) as built
 
-            // Total count
-            WITH count(d) as total, collect(d) as all_parcels
+            // Get category distributions
+            MATCH (p2:Parcel)
+            {where_clause.replace('p.', 'p2.')}
+            OPTIONAL MATCH (p2)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
+            WITH total, with_mpzp, residential, with_road_access, built,
+                 qc.id as q_cat, count(p2) as q_count
+            WITH total, with_mpzp, residential, with_road_access, built,
+                 collect({{category: q_cat, count: q_count}}) as quietness_stats
 
-            // Quietness distribution
-            UNWIND all_parcels as d1
-            OPTIONAL MATCH (d1)-[:MA_CISZE]->(c:KategoriaCiszy)
-            WITH total, all_parcels, c.name as cisza_cat, count(d1) as cisza_count
-            WITH total, all_parcels, collect({{category: cisza_cat, count: cisza_count}}) as quietness_stats
+            MATCH (p3:Parcel)
+            {where_clause.replace('p.', 'p3.')}
+            OPTIONAL MATCH (p3)-[:HAS_NATURE]->(nc:NatureCategory)
+            WITH total, with_mpzp, residential, with_road_access, built, quietness_stats,
+                 nc.id as n_cat, count(p3) as n_count
+            WITH total, with_mpzp, residential, with_road_access, built, quietness_stats,
+                 collect({{category: n_cat, count: n_count}}) as nature_stats
 
-            // Nature distribution
-            UNWIND all_parcels as d2
-            OPTIONAL MATCH (d2)-[:MA_NATURE]->(n:KategoriaNatury)
-            WITH total, all_parcels, quietness_stats, n.name as natura_cat, count(d2) as natura_count
-            WITH total, all_parcels, quietness_stats, collect({{category: natura_cat, count: natura_count}}) as nature_stats
-
-            // Character distribution
-            UNWIND all_parcels as d3
-            OPTIONAL MATCH (d3)-[:MA_CHARAKTER]->(ch:CharakterTerenu)
-            WITH total, all_parcels, quietness_stats, nature_stats, ch.name as char_cat, count(d3) as char_count
-            WITH total, all_parcels, quietness_stats, nature_stats, collect({{category: char_cat, count: char_count}}) as character_stats
-
-            // MPZP stats
-            UNWIND all_parcels as d4
-            WITH total, quietness_stats, nature_stats, character_stats,
-                 sum(CASE WHEN d4.has_mpzp = true THEN 1 ELSE 0 END) as with_mpzp,
-                 sum(CASE WHEN d4.has_public_road_access = true THEN 1 ELSE 0 END) as with_road_access
-
-            RETURN
-                total,
-                with_mpzp,
-                with_road_access,
-                quietness_stats,
-                nature_stats,
-                character_stats
+            RETURN total, with_mpzp, residential, with_road_access, built,
+                   quietness_stats, nature_stats
         """
 
         try:
@@ -911,12 +946,13 @@ class GraphService:
                     "total_parcels": total,
                     "with_mpzp": with_mpzp,
                     "pct_mpzp": round((with_mpzp / total * 100), 1) if total > 0 else 0,
+                    "residential_zone": r.get("residential", 0),
                     "with_road_access": with_road,
                     "pct_road_access": round((with_road / total * 100), 1) if total > 0 else 0,
+                    "built": r.get("built", 0),
                     "quietness_distribution": r.get("quietness_stats", []),
                     "nature_distribution": r.get("nature_stats", []),
-                    "character_distribution": r.get("character_stats", []),
-                    "location_filter": {"gmina": gmina, "powiat": powiat},
+                    "location_filter": {"gmina": gmina, "dzielnica": dzielnica},
                 }
             return {"error": "No data found"}
         except Exception as e:
@@ -927,7 +963,7 @@ class GraphService:
         """
         Get detailed neighborhood context for a parcel.
 
-        Returns all POI distances, land cover percentages, and character.
+        NEW schema: All data is on Parcel properties. Categories stored as properties.
 
         Args:
             parcel_id: ID of the parcel
@@ -936,77 +972,67 @@ class GraphService:
             Dictionary with full neighborhood context
         """
         query = """
-            MATCH (d:Dzialka {id_dzialki: $parcel_id})
-
-            // Basic info
-            OPTIONAL MATCH (d)-[:W_GMINIE]->(g:Gmina)
-            OPTIONAL MATCH (d)-[:W_MIEJSCOWOSCI]->(m:Miejscowosc)
-            OPTIONAL MATCH (g)-[:W_POWIECIE]->(p:Powiat)
-            OPTIONAL MATCH (d)-[:MA_PRZEZNACZENIE]->(s:SymbolMPZP)
-            OPTIONAL MATCH (d)-[:MA_CHARAKTER]->(ch:CharakterTerenu)
-            OPTIONAL MATCH (d)-[:MA_CISZE]->(ci:KategoriaCiszy)
-            OPTIONAL MATCH (d)-[:MA_NATURE]->(na:KategoriaNatury)
-            OPTIONAL MATCH (d)-[:MA_DOSTEP]->(ac:KategoriaDostepu)
-            OPTIONAL MATCH (d)-[:MA_ZABUDOWE]->(za:GestoscZabudowy)
-
-            // POI distances
-            OPTIONAL MATCH (d)-[rs:BLISKO_SZKOLY]->(:POIType {name: 'school'})
-            OPTIONAL MATCH (d)-[rsh:BLISKO_SKLEPU]->(:POIType {name: 'shop'})
-            OPTIONAL MATCH (d)-[rh:BLISKO_SZPITALA]->(:POIType {name: 'hospital'})
-            OPTIONAL MATCH (d)-[rb:BLISKO_PRZYSTANKU]->(:POIType {name: 'bus_stop'})
-            OPTIONAL MATCH (d)-[ri:BLISKO_PRZEMYSLU]->(:POIType {name: 'industrial'})
-
-            // Nature distances
-            OPTIONAL MATCH (d)-[rf:BLISKO_LASU]->(:LandCoverType {name: 'forest'})
-            OPTIONAL MATCH (d)-[rw:BLISKO_WODY]->(:LandCoverType {name: 'water'})
+            MATCH (p:Parcel {id_dzialki: $parcel_id})
 
             RETURN
-                d.id_dzialki as id,
-                d.area_m2 as area_m2,
-                d.centroid_lat as lat,
-                d.centroid_lon as lon,
+                p.id_dzialki as id,
+                p.area_m2 as area_m2,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
 
                 // Location
-                g.name as gmina,
-                m.name as miejscowosc,
-                p.name as powiat,
+                p.gmina as gmina,
+                p.dzielnica as miejscowosc,
+                'Trójmiasto' as powiat,
 
-                // Categories
-                ch.name as charakter_terenu,
-                ci.name as kategoria_ciszy,
-                na.name as kategoria_natury,
-                ac.name as kategoria_dostepu,
-                za.name as gestosc_zabudowy,
+                // Categories (properties on Parcel)
+                p.kategoria_ciszy as kategoria_ciszy,
+                p.kategoria_natury as kategoria_natury,
+                p.kategoria_dostepu as kategoria_dostepu,
+                p.gestosc_zabudowy as gestosc_zabudowy,
 
-                // Scores
-                d.quietness_score as quietness_score,
-                d.nature_score as nature_score,
-                d.accessibility_score as accessibility_score,
+                // Scores (properties)
+                p.quietness_score as quietness_score,
+                p.nature_score as nature_score,
+                p.accessibility_score as accessibility_score,
 
-                // MPZP
-                d.has_mpzp as has_mpzp,
-                s.kod as mpzp_symbol,
-                s.nazwa as mpzp_nazwa,
-                s.budowlany as mpzp_budowlany,
+                // POG/MPZP (properties)
+                p.has_pog as has_mpzp,
+                p.pog_symbol as mpzp_symbol,
+                p.pog_nazwa as mpzp_nazwa,
+                p.is_residential_zone as mpzp_budowlany,
+                p.pog_maks_wysokosc_m as pog_max_wysokosc,
+                p.pog_maks_zabudowa_pct as pog_max_zabudowa,
 
-                // POI distances
-                rs.distance_m as dist_to_school,
-                rsh.distance_m as dist_to_shop,
-                rh.distance_m as dist_to_hospital,
-                rb.distance_m as dist_to_bus_stop,
-                ri.distance_m as dist_to_industrial,
+                // POI distances (properties)
+                p.dist_to_school as dist_to_school,
+                p.dist_to_supermarket as dist_to_shop,
+                p.dist_to_doctors as dist_to_hospital,
+                p.dist_to_bus_stop as dist_to_bus_stop,
+                p.dist_to_industrial as dist_to_industrial,
 
-                // Nature distances
-                rf.distance_m as dist_to_forest,
-                rw.distance_m as dist_to_water,
+                // Nature distances (properties)
+                p.dist_to_forest as dist_to_forest,
+                p.dist_to_water as dist_to_water,
 
-                // Buffer analysis
-                d.pct_forest_500m as pct_forest_500m,
-                d.pct_water_500m as pct_water_500m,
-                d.count_buildings_500m as count_buildings_500m,
+                // Water-specific distances
+                p.dist_to_sea as dist_to_sea,
+                p.dist_to_river as dist_to_river,
+                p.dist_to_lake as dist_to_lake,
+                p.dist_to_canal as dist_to_canal,
+                p.dist_to_pond as dist_to_pond,
+                p.nearest_water_type as nearest_water_type,
 
-                // Road access
-                d.has_public_road_access as has_road_access
+                // Buffer analysis (properties)
+                p.pct_forest_500m as pct_forest_500m,
+                p.pct_water_500m as pct_water_500m,
+                p.count_buildings_500m as count_buildings_500m,
+
+                // Building info
+                p.is_built as is_built,
+                p.building_count as building_count,
+                p.building_coverage_pct as building_coverage_pct,
+                p.building_max_floors as building_max_floors
         """
 
         try:
@@ -1014,30 +1040,62 @@ class GraphService:
             if results:
                 r = dict(results[0])
 
+                # Map water type to Polish name
+                water_type_pl = {
+                    "morze": "Morze",
+                    "jezioro": "Jezioro",
+                    "rzeka": "Rzeka",
+                    "kanal": "Kanał",
+                    "staw": "Staw"
+                }
+
                 # Build human-readable summary
                 summary = []
 
                 # Location
                 if r.get("miejscowosc"):
-                    summary.append(f"Lokalizacja: {r['miejscowosc']}, gm. {r.get('gmina', '')}")
+                    summary.append(f"Lokalizacja: {r['miejscowosc']}, {r.get('gmina', '')}")
                 elif r.get("gmina"):
                     summary.append(f"Lokalizacja: {r['gmina']}")
 
-                # Character
-                if r.get("charakter_terenu"):
-                    summary.append(f"Charakter: {r['charakter_terenu']}")
+                # Area
+                if r.get("area_m2"):
+                    summary.append(f"Powierzchnia: {r['area_m2']:,.0f} m²")
+
+                # Built status
+                is_built = r.get("is_built")
+                if is_built and str(is_built).lower() == 'true':
+                    building_info = "Zabudowana"
+                    if r.get("building_count"):
+                        building_info += f" ({r['building_count']} bud.)"
+                    summary.append(building_info)
+                else:
+                    summary.append("Niezabudowana")
 
                 # Quietness
-                if r.get("quietness_score"):
-                    summary.append(f"Cisza: {int(r['quietness_score'])}/100 ({r.get('kategoria_ciszy', '')})")
+                if r.get("quietness_score") is not None:
+                    kat = r.get('kategoria_ciszy', '')
+                    summary.append(f"Cisza: {int(r['quietness_score'])}/100 ({kat})")
 
                 # Nature
-                if r.get("nature_score"):
-                    summary.append(f"Natura: {int(r['nature_score'])}/100 ({r.get('kategoria_natury', '')})")
+                if r.get("nature_score") is not None:
+                    kat = r.get('kategoria_natury', '')
+                    summary.append(f"Natura: {int(r['nature_score'])}/100 ({kat})")
 
                 # Accessibility
-                if r.get("accessibility_score"):
-                    summary.append(f"Dostępność: {int(r['accessibility_score'])}/100 ({r.get('kategoria_dostepu', '')})")
+                if r.get("accessibility_score") is not None:
+                    kat = r.get('kategoria_dostepu', '')
+                    summary.append(f"Dostępność: {int(r['accessibility_score'])}/100 ({kat})")
+
+                # Water proximity
+                if r.get("nearest_water_type"):
+                    wt = r["nearest_water_type"]
+                    water_pl = water_type_pl.get(wt, wt)
+                    # Get the specific distance for this water type
+                    dist_key = f"dist_to_{wt}" if wt != "morze" else "dist_to_sea"
+                    water_dist = r.get(dist_key, r.get("dist_to_water"))
+                    if water_dist:
+                        summary.append(f"Woda: {water_pl} ({int(water_dist)}m)")
 
                 r["summary"] = summary
                 return r
@@ -1165,12 +1223,7 @@ class GraphService:
                 p.dist_to_water as dist_to_water,
 
                 // Nearest water info
-                p.nearest_water_type as nearest_water_type,
-
-                // Proximity flags
-                p.near_morze as near_sea,
-                p.near_jezioro as near_lake,
-                p.near_rzeka as near_river
+                p.nearest_water_type as nearest_water_type
         """
 
         try:
@@ -1202,7 +1255,7 @@ class GraphService:
         """
         Get complete context for a parcel including all features.
 
-        Combines neighborhood, water, pricing, and POG information.
+        All data from Parcel properties - no relations needed.
 
         Args:
             parcel_id: ID of the parcel
@@ -1213,15 +1266,6 @@ class GraphService:
         query = """
             MATCH (p:Parcel {id_dzialki: $parcel_id})
 
-            // Get category relations
-            OPTIONAL MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
-            OPTIONAL MATCH (p)-[:HAS_NATURE]->(nc:NatureCategory)
-            OPTIONAL MATCH (p)-[:HAS_ACCESS]->(ac:AccessCategory)
-            OPTIONAL MATCH (p)-[:HAS_DENSITY]->(dc:DensityCategory)
-            OPTIONAL MATCH (p)-[:NEAREST_WATER_TYPE]->(wt:WaterType)
-            OPTIONAL MATCH (p)-[:LOCATED_IN]->(d:District)
-            OPTIONAL MATCH (d)-[:IN_PRICE_SEGMENT]->(ps:PriceSegment)
-
             RETURN
                 // Basic info
                 p.id_dzialki as id_dzialki,
@@ -1231,15 +1275,11 @@ class GraphService:
                 p.centroid_lat as lat,
                 p.centroid_lon as lon,
 
-                // Categories
-                qc.id as kategoria_ciszy,
-                qc.name_pl as kategoria_ciszy_pl,
-                nc.id as kategoria_natury,
-                nc.name_pl as kategoria_natury_pl,
-                ac.id as kategoria_dostepu,
-                ac.name_pl as kategoria_dostepu_pl,
-                dc.id as gestosc_zabudowy,
-                dc.name_pl as gestosc_zabudowy_pl,
+                // Categories (properties on Parcel)
+                p.kategoria_ciszy as kategoria_ciszy,
+                p.kategoria_natury as kategoria_natury,
+                p.kategoria_dostepu as kategoria_dostepu,
+                p.gestosc_zabudowy as gestosc_zabudowy,
 
                 // Scores
                 p.quietness_score as quietness_score,
@@ -1249,8 +1289,8 @@ class GraphService:
                 // Building info
                 p.is_built as is_built,
                 p.building_count as building_count,
-                p.building_type as building_type,
                 p.building_coverage_pct as building_coverage_pct,
+                p.building_max_floors as building_max_floors,
 
                 // POG (zoning)
                 p.pog_symbol as pog_symbol,
@@ -1262,11 +1302,11 @@ class GraphService:
 
                 // Water info
                 p.nearest_water_type as nearest_water_type,
-                wt.name_pl as nearest_water_type_pl,
-                wt.premium_factor as water_premium_factor,
                 p.dist_to_sea as dist_to_sea,
                 p.dist_to_lake as dist_to_lake,
                 p.dist_to_river as dist_to_river,
+                p.dist_to_canal as dist_to_canal,
+                p.dist_to_pond as dist_to_pond,
                 p.dist_to_water as dist_to_water,
 
                 // Distances
@@ -1278,13 +1318,7 @@ class GraphService:
 
                 // Context
                 p.pct_forest_500m as pct_forest_500m,
-                p.count_buildings_500m as count_buildings_500m,
-
-                // Pricing
-                p.price_segment as price_segment,
-                ps.name_pl as price_segment_pl,
-                ps.price_min as price_min,
-                ps.price_max as price_max
+                p.count_buildings_500m as count_buildings_500m
         """
 
         try:
@@ -1292,29 +1326,39 @@ class GraphService:
             if results:
                 r = dict(results[0])
 
+                # Map water type to Polish name
+                water_type_pl = {
+                    "morze": "Morze",
+                    "jezioro": "Jezioro",
+                    "rzeka": "Rzeka",
+                    "kanal": "Kanał",
+                    "staw": "Staw"
+                }
+
                 # Build comprehensive summary
+                is_built = r.get("is_built")
+                is_built_bool = is_built and str(is_built).lower() == 'true'
+                is_res = r.get("is_residential_zone")
+                is_res_bool = is_res and str(is_res).lower() == 'true'
+
                 summary = {
                     "lokalizacja": f"{r.get('dzielnica', '')}, {r.get('gmina', '')}",
                     "powierzchnia": f"{r.get('area_m2', 0):,.0f} m²",
-                    "zabudowana": "Tak" if r.get("is_built") else "Nie",
-                    "strefa_mieszkaniowa": "Tak" if r.get("is_residential_zone") else "Nie",
-                    "cisza": f"{r.get('quietness_score', 0)}/100 ({r.get('kategoria_ciszy_pl', '')})",
-                    "natura": f"{r.get('nature_score', 0)}/100 ({r.get('kategoria_natury_pl', '')})",
-                    "dostepnosc": f"{r.get('accessibility_score', 0)}/100 ({r.get('kategoria_dostepu_pl', '')})",
+                    "zabudowana": "Tak" if is_built_bool else "Nie",
+                    "strefa_mieszkaniowa": "Tak" if is_res_bool else "Nie",
+                    "cisza": f"{r.get('quietness_score', 0)}/100 ({r.get('kategoria_ciszy', '')})",
+                    "natura": f"{r.get('nature_score', 0)}/100 ({r.get('kategoria_natury', '')})",
+                    "dostepnosc": f"{r.get('accessibility_score', 0)}/100 ({r.get('kategoria_dostepu', '')})",
                 }
 
                 # Water summary
                 if r.get("nearest_water_type"):
-                    water_dist = r.get(f"dist_to_{r['nearest_water_type']}", r.get("dist_to_water"))
-                    summary["najblizsa_woda"] = f"{r.get('nearest_water_type_pl', '')} ({water_dist}m)"
-
-                # Price estimate
-                if r.get("price_min") and r.get("price_max"):
-                    area = r.get("area_m2", 0)
-                    est_min = area * r["price_min"]
-                    est_max = area * r["price_max"]
-                    summary["szacunkowa_wartosc"] = f"{est_min/1000:.0f}k - {est_max/1000:.0f}k PLN"
-                    summary["segment_cenowy"] = r.get("price_segment_pl", "")
+                    wt = r["nearest_water_type"]
+                    water_pl = water_type_pl.get(wt, wt)
+                    dist_key = f"dist_to_{wt}" if wt != "morze" else "dist_to_sea"
+                    water_dist = r.get(dist_key, r.get("dist_to_water"))
+                    if water_dist:
+                        summary["najblizsa_woda"] = f"{water_pl} ({int(water_dist)}m)"
 
                 r["summary"] = summary
                 return r

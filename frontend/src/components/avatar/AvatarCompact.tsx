@@ -2,7 +2,7 @@ import { motion } from 'motion/react';
 import { useUIPhaseStore } from '../../stores/uiPhaseStore';
 
 export function AvatarCompact() {
-  const mood = useUIPhaseStore((s) => s.avatarMood);
+  const mood = useUIPhaseStore((s) => s.avatarMood) || 'idle';
 
   const isSpeaking = mood === 'speaking';
   const isThinking = mood === 'thinking';

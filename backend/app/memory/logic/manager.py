@@ -5,7 +5,7 @@ Handles all state mutations in a centralized, predictable way.
 Implements the state machine logic for funnel transitions.
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set, Tuple
 from datetime import datetime, date
 import uuid
 
@@ -18,6 +18,57 @@ from ..schemas import (
     SearchState,
     SearchSession,
 )
+
+
+# =============================================================================
+# FUNNEL PHASE TRANSITION RULES
+# =============================================================================
+# Define which transitions are allowed (from_phase -> set of allowed to_phases)
+
+ALLOWED_TRANSITIONS: Dict[FunnelPhase, Set[FunnelPhase]] = {
+    FunnelPhase.DISCOVERY: {
+        FunnelPhase.SEARCH,      # Forward: enough info collected
+        FunnelPhase.RETENTION,   # Return after abandonment
+    },
+    FunnelPhase.SEARCH: {
+        FunnelPhase.EVALUATION,  # Forward: user liked a parcel
+        FunnelPhase.DISCOVERY,   # Back: need more info
+        FunnelPhase.RETENTION,   # Return after abandonment
+    },
+    FunnelPhase.EVALUATION: {
+        FunnelPhase.NEGOTIATION, # Forward: property selected
+        FunnelPhase.SEARCH,      # Back: search again
+        FunnelPhase.LEAD_CAPTURE,# Skip: direct to lead capture
+        FunnelPhase.RETENTION,   # Return after abandonment
+    },
+    FunnelPhase.NEGOTIATION: {
+        FunnelPhase.LEAD_CAPTURE,# Forward: ready to capture
+        FunnelPhase.EVALUATION,  # Back: reconsider options
+        FunnelPhase.RETENTION,   # Return after abandonment
+    },
+    FunnelPhase.LEAD_CAPTURE: {
+        FunnelPhase.EVALUATION,  # Back: want more options
+        FunnelPhase.SEARCH,      # Back: new search
+        FunnelPhase.RETENTION,   # Session end
+    },
+    FunnelPhase.RETENTION: {
+        FunnelPhase.DISCOVERY,   # Start fresh
+        FunnelPhase.SEARCH,      # Resume search
+        FunnelPhase.EVALUATION,  # Resume evaluation
+    },
+}
+
+
+class PhaseTransitionError(Exception):
+    """Raised when an invalid phase transition is attempted."""
+
+    def __init__(self, from_phase: FunnelPhase, to_phase: FunnelPhase):
+        self.from_phase = from_phase
+        self.to_phase = to_phase
+        super().__init__(
+            f"Invalid transition: {from_phase.value} -> {to_phase.value}. "
+            f"Allowed: {[p.value for p in ALLOWED_TRANSITIONS.get(from_phase, set())]}"
+        )
 
 
 class MemoryManager:
@@ -312,16 +363,60 @@ class MemoryManager:
     # PHASE TRANSITIONS
     # =========================================================================
 
+    def is_transition_allowed(
+        self,
+        from_phase: FunnelPhase,
+        to_phase: FunnelPhase
+    ) -> bool:
+        """Check if a phase transition is allowed.
+
+        Returns:
+            True if transition is allowed, False otherwise.
+        """
+        if from_phase == to_phase:
+            return True  # No-op is always allowed
+
+        allowed = ALLOWED_TRANSITIONS.get(from_phase, set())
+        return to_phase in allowed
+
+    def get_allowed_transitions(self, phase: FunnelPhase) -> List[FunnelPhase]:
+        """Get list of phases that can be transitioned to from the given phase.
+
+        Returns:
+            List of allowed target phases.
+        """
+        return list(ALLOWED_TRANSITIONS.get(phase, set()))
+
     def transition_phase(
         self,
         state: AgentState,
-        new_phase: FunnelPhase
+        new_phase: FunnelPhase,
+        force: bool = False
     ) -> AgentState:
-        """Transition to a new funnel phase."""
+        """Transition to a new funnel phase.
+
+        Args:
+            state: Current agent state
+            new_phase: Target phase
+            force: If True, skip validation (use with caution)
+
+        Returns:
+            Updated state
+
+        Raises:
+            PhaseTransitionError: If transition is not allowed and force=False
+        """
         old_phase = state.working.current_phase
 
         if old_phase == new_phase:
             return state
+
+        # Validate transition unless forced
+        if not force and not self.is_transition_allowed(old_phase, new_phase):
+            logger.warning(
+                f"Invalid phase transition attempted: {old_phase.value} -> {new_phase.value}"
+            )
+            raise PhaseTransitionError(old_phase, new_phase)
 
         logger.info(f"Phase transition: {old_phase.value} -> {new_phase.value}")
 

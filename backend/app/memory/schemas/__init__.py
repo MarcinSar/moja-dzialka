@@ -48,16 +48,20 @@ class AgentState(BaseModel):
         self.workflow.last_activity = datetime.utcnow()
 
     def to_context_dict(self) -> dict:
-        """Convert to dict suitable for Jinja2 template rendering."""
+        """Convert to dict suitable for Jinja2 template rendering.
+
+        Note: Returns actual Pydantic model objects (not dicts) so that
+        templates can call methods like workflow.funnel_progress.is_ready_for_search().
+        """
         return {
             "user_id": self.user_id,
             "session_id": self.session_id,
-            "core": self.core.model_dump(),
-            "working": self.working.model_dump(),
-            "semantic": self.semantic.model_dump(),
-            "episodic": self.episodic.model_dump(),
-            "workflow": self.workflow.model_dump(),
-            "preferences": self.preferences.model_dump(),
+            "core": self.core,
+            "working": self.working,
+            "semantic": self.semantic,
+            "episodic": self.episodic,
+            "workflow": self.workflow,
+            "preferences": self.preferences,
         }
 
 

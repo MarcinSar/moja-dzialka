@@ -7,21 +7,25 @@ They define the output schema and prompt template.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Type, Optional, Dict, Any, List
+from typing import Type, Optional, Dict, Any, List, Union
 
 from pydantic import BaseModel, Field
 from jinja2 import Template, Environment, FileSystemLoader
 
 
 class SkillContext(BaseModel):
-    """Context passed to skill for prompt rendering."""
-    # Memory layers
-    core: Dict[str, Any] = Field(default_factory=dict)
-    working: Dict[str, Any] = Field(default_factory=dict)
-    semantic: Dict[str, Any] = Field(default_factory=dict)
-    episodic: Dict[str, Any] = Field(default_factory=dict)
-    workflow: Dict[str, Any] = Field(default_factory=dict)
-    preferences: Dict[str, Any] = Field(default_factory=dict)
+    """Context passed to skill for prompt rendering.
+
+    Memory layers can be either Pydantic models or dicts to allow
+    templates to call methods on them (e.g., workflow.funnel_progress.is_ready_for_search()).
+    """
+    # Memory layers - accept Any to allow both dicts and Pydantic models
+    core: Any = Field(default_factory=dict)
+    working: Any = Field(default_factory=dict)
+    semantic: Any = Field(default_factory=dict)
+    episodic: Any = Field(default_factory=dict)
+    workflow: Any = Field(default_factory=dict)
+    preferences: Any = Field(default_factory=dict)
 
     # Current interaction
     user_message: str = ""
@@ -29,6 +33,9 @@ class SkillContext(BaseModel):
 
     # Additional context
     extra: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class SkillResult(BaseModel):
@@ -91,12 +98,17 @@ class Skill(ABC):
         return Path(__file__).parent / "templates"
 
     def get_template(self) -> Template:
-        """Load Jinja2 template for this skill."""
-        env = Environment(
-            loader=FileSystemLoader(self.template_dir),
-            trim_blocks=True,
-            lstrip_blocks=True,
-        )
+        """Load Jinja2 template for this skill.
+
+        Uses the shared template environment with custom filters.
+        """
+        from app.memory.templates import get_template_env
+
+        # Get the shared environment and add skill template directory
+        env = get_template_env()
+        # Add the skill templates directory to the loader
+        env.loader.searchpath.append(str(self.template_dir))
+
         return env.get_template(self.template_name)
 
     def prepare_prompt(self, context: SkillContext) -> str:
@@ -145,7 +157,7 @@ class ToolCallingSkill(Skill):
     def get_tools(self) -> List[Dict[str, Any]]:
         """Get tool definitions for this skill."""
         # Import here to avoid circular imports
-        from app.agent.tools import AGENT_TOOLS
+        from app.engine.tools_registry import AGENT_TOOLS
 
         return [
             tool for tool in AGENT_TOOLS

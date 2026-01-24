@@ -11,6 +11,7 @@ The executor:
 from typing import Dict, Any, List, Optional, AsyncGenerator
 import json
 import time
+import asyncio
 
 from loguru import logger
 import anthropic
@@ -19,7 +20,22 @@ from app.config import settings
 from app.memory import AgentState
 from app.memory.templates import render_main_prompt
 from app.skills import get_skill, Skill, SkillContext
-from app.agent.tools import AGENT_TOOLS, execute_tool
+from app.engine.tools_registry import AGENT_TOOLS
+from app.engine.tool_executor import ToolExecutor
+
+
+# Retry configuration
+MAX_RETRIES = 3
+INITIAL_BACKOFF_SECONDS = 1.0
+MAX_BACKOFF_SECONDS = 30.0
+BACKOFF_MULTIPLIER = 2.0
+
+# Retryable error types
+RETRYABLE_ERRORS = (
+    anthropic.APIConnectionError,
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,
+)
 
 
 class PropertyAdvisorAgent:
@@ -39,6 +55,54 @@ class PropertyAdvisorAgent:
     def __init__(self):
         self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
         self._last_response: Optional[str] = None
+
+    async def _retry_with_backoff(
+        self,
+        coro_func,
+        *args,
+        max_retries: int = MAX_RETRIES,
+        **kwargs
+    ):
+        """Execute a coroutine with exponential backoff retry.
+
+        Args:
+            coro_func: Async function to execute
+            *args: Arguments for the function
+            max_retries: Maximum number of retries
+            **kwargs: Keyword arguments for the function
+
+        Returns:
+            Result from the coroutine
+
+        Raises:
+            Last exception if all retries failed
+        """
+        backoff = INITIAL_BACKOFF_SECONDS
+        last_exception = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                return await coro_func(*args, **kwargs)
+            except RETRYABLE_ERRORS as e:
+                last_exception = e
+                if attempt < max_retries:
+                    logger.warning(
+                        f"API call failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Retrying in {backoff:.1f}s..."
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
+                else:
+                    logger.error(f"API call failed after {max_retries + 1} attempts: {e}")
+                    raise
+            except Exception as e:
+                # Non-retryable error
+                logger.error(f"Non-retryable API error: {e}")
+                raise
+
+        # Should not reach here, but just in case
+        if last_exception:
+            raise last_exception
 
     async def execute(
         self,
@@ -85,7 +149,7 @@ class PropertyAdvisorAgent:
         self._last_response = None
 
         async for event in self._execute_with_tools(
-            system_prompt, messages, tools, skill
+            system_prompt, messages, tools, skill, state
         ):
             yield event
 
@@ -139,20 +203,63 @@ class PropertyAdvisorAgent:
 
         return messages
 
+    async def _create_stream_with_retry(
+        self,
+        system_prompt: str,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+    ):
+        """Create a streaming response with retry logic.
+
+        Returns context manager for the stream.
+        """
+        backoff = INITIAL_BACKOFF_SECONDS
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                return self.client.messages.stream(
+                    model=self.MODEL,
+                    max_tokens=self.MAX_TOKENS,
+                    system=system_prompt,
+                    tools=tools,
+                    messages=messages,
+                )
+            except RETRYABLE_ERRORS as e:
+                if attempt < MAX_RETRIES:
+                    logger.warning(
+                        f"Stream creation failed (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}. "
+                        f"Retrying in {backoff:.1f}s..."
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
+                else:
+                    logger.error(f"Stream creation failed after {MAX_RETRIES + 1} attempts: {e}")
+                    raise
+
+        # Should not reach here
+        raise RuntimeError("Unexpected state in _create_stream_with_retry")
+
     async def _execute_with_tools(
         self,
         system_prompt: str,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
         skill: Skill,
+        state: AgentState,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """Execute with tool calling loop."""
+        """Execute with tool calling loop and retry logic.
+
+        Uses ToolExecutor to handle tool execution with proper V2 state management.
+        State updates from tools are applied directly to the state object.
+        """
+        # Create tool executor with current state
+        tool_executor = ToolExecutor(state)
         iterations = 0
 
         while iterations < self.MAX_TOOL_ITERATIONS:
             iterations += 1
 
-            # Stream response from Claude
+            # Stream response from Claude (with retry)
             assistant_content = []
             tool_calls = []
             current_text = ""
@@ -160,13 +267,18 @@ class PropertyAdvisorAgent:
             current_tool_id = None
             current_tool_name = None
 
-            async with self.client.messages.stream(
-                model=self.MODEL,
-                max_tokens=self.MAX_TOKENS,
-                system=system_prompt,
-                tools=tools,
-                messages=messages,
-            ) as stream:
+            try:
+                stream_context = await self._create_stream_with_retry(
+                    system_prompt, messages, tools
+                )
+            except Exception as e:
+                yield {
+                    "type": "error",
+                    "data": {"message": f"API error after retries: {str(e)}"}
+                }
+                return
+
+            async with stream_context as stream:
                 async for event in stream:
                     if event.type == "content_block_start":
                         if event.content_block.type == "text":
@@ -230,7 +342,7 @@ class PropertyAdvisorAgent:
             if not tool_calls:
                 break
 
-            # Execute tool calls
+            # Execute tool calls using ToolExecutor
             tool_results = []
             for tool_call in tool_calls:
                 yield {
@@ -239,8 +351,13 @@ class PropertyAdvisorAgent:
                 }
 
                 start_time = time.time()
-                result = await execute_tool(tool_call["name"], tool_call["input"])
+                result, state_updates = await tool_executor.execute(
+                    tool_call["name"], tool_call["input"]
+                )
                 duration_ms = int((time.time() - start_time) * 1000)
+
+                # Apply state updates from tool execution
+                self._apply_state_updates(state, state_updates)
 
                 yield {
                     "type": "tool_result",
@@ -249,6 +366,7 @@ class PropertyAdvisorAgent:
                         "duration_ms": duration_ms,
                         "result": result,
                         "result_preview": self._summarize_result(result),
+                        "state_updates": list(state_updates.keys()) if state_updates else [],
                     }
                 }
 
@@ -303,6 +421,34 @@ class PropertyAdvisorAgent:
             return f"Wartość: {result.get('estimated_range', 'N/A')}"
 
         return "Dane pobrane"
+
+    def _apply_state_updates(
+        self,
+        state: AgentState,
+        updates: Dict[str, Any]
+    ) -> None:
+        """Apply state updates from tool execution.
+
+        Handles nested updates like 'search_state.perceived_preferences'.
+        """
+        if not updates:
+            return
+
+        for key, value in updates.items():
+            if "." in key:
+                # Handle nested updates (e.g., "search_state.perceived_preferences")
+                parts = key.split(".")
+                if parts[0] == "search_state" and len(parts) == 2:
+                    search_state = state.working.search_state
+                    attr = parts[1]
+                    if hasattr(search_state, attr):
+                        setattr(search_state, attr, value)
+                        logger.debug(f"Updated search_state.{attr}")
+            else:
+                # Direct attribute update
+                if hasattr(state, key):
+                    setattr(state, key, value)
+                    logger.debug(f"Updated state.{key}")
 
     def get_last_response(self) -> Optional[str]:
         """Get the last text response from the agent."""

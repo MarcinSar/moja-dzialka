@@ -91,15 +91,16 @@ class AgentCoordinator:
             }
 
             # 4. Execute skill (yields events)
+            # Note: State updates are now handled internally by ToolExecutor
+            # and applied in PropertyAdvisorAgent._apply_state_updates()
             async for event in self.executor.execute(skill_name, message, state):
                 yield event
 
-                # Handle tool results specially
+                # Track funnel progress based on tool results
                 if event["type"] == "tool_result":
-                    # Update state based on tool result
                     tool_name = event["data"].get("tool")
                     result = event["data"].get("result", {})
-                    self._update_state_from_tool(state, tool_name, result)
+                    self._update_funnel_from_tool(state, tool_name, result)
 
             # 5. Get final response from executor
             final_response = self.executor.get_last_response()
@@ -157,8 +158,8 @@ class AgentCoordinator:
 
             logger.info(f"Loaded state for user {user_id}, session {state.session_id}")
         else:
-            # Create new state
-            state = self.memory_manager.create_initial_state(user_id)
+            # Create new state with the session_id from the API layer
+            state = self.memory_manager.create_initial_state(user_id, session_id)
             logger.info(f"Created new state for user {user_id}")
 
         return state
@@ -224,37 +225,31 @@ class AgentCoordinator:
         # Default to discovery
         return "discovery"
 
-    def _update_state_from_tool(
+    def _update_funnel_from_tool(
         self,
         state: AgentState,
         tool_name: str,
         result: Dict[str, Any]
     ) -> None:
-        """Update state based on tool result."""
+        """Update funnel progress based on tool result.
+
+        Note: Search state updates are now handled by ToolExecutor.
+        This method only tracks funnel progress for phase transitions.
+        """
         if not result or "error" in result:
             return
 
         funnel = state.workflow.funnel_progress
-        search = state.working.search_state
 
-        # Search tools
+        # Search tools - track funnel progress
         if tool_name == "propose_search_preferences":
-            search.perceived_preferences = result.get("raw_preferences", {})
-            search.preferences_proposed = True
             funnel.preferences_proposed = True
 
         elif tool_name == "approve_search_preferences":
-            if search.perceived_preferences:
-                search.approved_preferences = search.perceived_preferences.copy()
-                search.preferences_approved = True
-                funnel.preferences_approved = True
+            funnel.preferences_approved = True
 
         elif tool_name == "execute_search":
             parcels = result.get("parcels", [])
-            search.current_results = parcels
-            search.search_executed = True
-            search.results_shown = len(parcels)
-            search.search_iteration = result.get("iteration", 1)
             funnel.search_initiated = True
             funnel.first_results_shown = True
             funnel.parcels_shown_count += len(parcels)

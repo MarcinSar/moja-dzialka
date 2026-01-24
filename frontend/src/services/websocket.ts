@@ -4,8 +4,34 @@ type EventCallback = (event: WSEvent) => void;
 type ConnectionCallback = (connected: boolean) => void;
 
 // Use WSS for HTTPS, WS for HTTP; connect through nginx proxy
+// Using API v2 with 7-layer memory model
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL = `${protocol}//${window.location.host}/api/v1/conversation/ws`;
+const WS_URL = `${protocol}//${window.location.host}/api/v2/conversation/ws`;
+
+// Persistence keys for localStorage
+const USER_ID_KEY = 'moja-dzialka-user-id';
+const SESSION_ID_KEY = 'moja-dzialka-session-id';
+
+// Get or create persistent user ID
+function getOrCreateUserId(): string {
+  let userId = localStorage.getItem(USER_ID_KEY);
+  if (!userId) {
+    userId = crypto.randomUUID();
+    localStorage.setItem(USER_ID_KEY, userId);
+    console.log('[WS] Created new user ID:', userId);
+  }
+  return userId;
+}
+
+// Get stored session ID (may be null)
+function getSessionId(): string | null {
+  return localStorage.getItem(SESSION_ID_KEY);
+}
+
+// Store session ID received from server
+function storeSessionId(sessionId: string): void {
+  localStorage.setItem(SESSION_ID_KEY, sessionId);
+}
 
 class WebSocketService {
   private ws: WebSocket | null = null;
@@ -29,16 +55,38 @@ class WebSocketService {
         this.reconnectAttempts = 0;
         this.notifyConnectionChange(true);
 
-        // Send init message
-        this.send({ type: 'init' });
+        // Send init message with persistent user_id and session_id
+        const userId = getOrCreateUserId();
+        const sessionId = getSessionId();
+        console.log('[WS] Init with user:', userId, 'session:', sessionId);
+        this.send({
+          type: 'init',
+          user_id: userId,
+          session_id: sessionId,
+        });
       };
 
       this.ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as WSEvent;
+          // Validate event structure before notifying
+          if (!data || typeof data.type !== 'string') {
+            console.warn('[WS] Invalid event structure:', data);
+            return;
+          }
+
+          // Store session_id when we receive session event
+          if (data.type === 'session' && data.data) {
+            const sessionData = data.data as { session_id?: string };
+            if (sessionData.session_id) {
+              storeSessionId(sessionData.session_id);
+              console.log('[WS] Stored session ID:', sessionData.session_id);
+            }
+          }
+
           this.notifyEvent(data);
         } catch (error) {
-          console.error('[WS] Failed to parse message:', error);
+          console.error('[WS] Message handling error:', error, 'Raw:', event.data?.substring?.(0, 200));
         }
       };
 
@@ -94,7 +142,13 @@ class WebSocketService {
   }
 
   private notifyEvent(event: WSEvent): void {
-    this.eventListeners.forEach((cb) => cb(event));
+    this.eventListeners.forEach((cb) => {
+      try {
+        cb(event);
+      } catch (error) {
+        console.error('[WS] Event handler error for type:', event.type, error);
+      }
+    });
   }
 
   private notifyConnectionChange(connected: boolean): void {

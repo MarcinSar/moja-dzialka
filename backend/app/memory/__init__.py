@@ -25,7 +25,11 @@ from .schemas import (
     InvestmentStrategy,
 )
 
-from .logic.manager import MemoryManager
+from .logic.manager import (
+    MemoryManager,
+    PhaseTransitionError,
+    ALLOWED_TRANSITIONS,
+)
 from .logic.compressor import SessionCompressor
 
 __all__ = [
@@ -46,4 +50,7 @@ __all__ = [
     # Logic
     "MemoryManager",
     "SessionCompressor",
+    # Transition validation
+    "PhaseTransitionError",
+    "ALLOWED_TRANSITIONS",
 ]

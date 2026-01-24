@@ -26,8 +26,8 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 
 # Paths
-BASE_PATH = Path("/home/marcin/moja-dzialka")
-CSV_PATH = BASE_PATH / "data" / "ready-for-import" / "neo4j"
+BASE_PATH = Path("/root/moja-dzialka")
+CSV_PATH = BASE_PATH / "data" / "ready-for-import" / "neo4j" / "csv"
 
 # Batch size for imports
 BATCH_SIZE = 5000
@@ -90,6 +90,7 @@ def import_parcels(session):
     property_map = """
         id_dzialki: row.id_dzialki,
         gmina: row.gmina,
+        miejscowosc: row.miejscowosc,
         dzielnica: row.dzielnica,
         powiat: row.powiat,
         wojewodztwo: row.wojewodztwo,
