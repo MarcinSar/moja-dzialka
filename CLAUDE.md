@@ -325,14 +325,88 @@ moja-dzialka/
 │   ├── data/processed/         # Przetworzone dane źródłowe
 │   ├── data/bdot10k_trojmiasto/# Wycięte warstwy BDOT10k
 │   └── scripts/pipeline/       # Aktualny pipeline (12 skryptów)
-├── docs/                       # Aktualna dokumentacja (14 plików)
-├── archive/                    # Archiwum (4.4 GB)
-│   ├── raw-data/               # Surowe dane źródłowe
-│   ├── docs-legacy/            # Przestarzała dokumentacja
-│   ├── scripts-legacy/         # Stare skrypty pipeline
-│   └── cache/                  # Pliki tymczasowe (można usunąć)
+├── scripts/
+│   └── deploy/                 # Skrypty produkcyjne
+│       ├── deploy.sh           # Deployment
+│       ├── backup.sh           # Backup baz danych
+│       ├── restore.sh          # Przywracanie z backupu
+│       └── import-data.sh      # Import danych do baz
+├── nginx/
+│   └── moja-dzialka.conf       # Konfiguracja Nginx + SSL
+├── docs/                       # Aktualna dokumentacja (15 plików)
+├── docker-compose.yml          # Konfiguracja deweloperska
+├── docker-compose.prod.yml     # Overrides produkcyjne
+├── archive/                    # Archiwum (4.4 GB) - nie w git
 └── CLAUDE.md                   # Ten plik
 ```
+
+---
+
+## Deployment produkcyjny ✅ ZAPLANOWANY (2026-01-24)
+
+Pełna dokumentacja: `docs/DEPLOYMENT.md`
+
+### Serwer docelowy
+
+| Parametr | Wartość |
+|----------|---------|
+| Provider | Hetzner CX53 |
+| CPU | 16 vCPU (AMD EPYC-Rome) |
+| RAM | 32 GB |
+| Storage | 305 GB NVMe SSD |
+| OS | Ubuntu 24.04 LTS |
+| IP | 77.42.86.222 |
+
+### Architektura kontenerów
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Cloudflare (DNS + SSL) → moja-dzialka.pl                   │
+└────────────────────────────┬────────────────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Nginx (:80/:443) → reverse proxy                           │
+├─────────────────────────────────────────────────────────────┤
+│  Docker Network                                             │
+│  ┌─────────┐ ┌─────────┐ ┌────────┐ ┌────────┐ ┌────────┐   │
+│  │ Backend │ │Frontend │ │ Celery │ │ Redis  │ │ Mongo  │   │
+│  │ :8000   │ │ :3000   │ │ Worker │ │ :6379  │ │ :27017 │   │
+│  └─────────┘ └─────────┘ └────────┘ └────────┘ └────────┘   │
+│  ┌─────────┐ ┌─────────┐ ┌────────┐                         │
+│  │PostGIS  │ │ Neo4j   │ │ Milvus │                         │
+│  │ :5432   │ │ :7687   │ │ :19530 │                         │
+│  └─────────┘ └─────────┘ └────────┘                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Alokacja RAM (32 GB)
+
+| Usługa | RAM | Uzasadnienie |
+|--------|-----|--------------|
+| Neo4j | 8-10 GB | Graf 155k działek |
+| PostgreSQL | 4-6 GB | Spatial queries |
+| Milvus | 4-6 GB | Vector search |
+| Backend | 2-4 GB | API + Claude calls |
+| Redis | 1-2 GB | Session cache |
+| MongoDB | 1-2 GB | Leads |
+| System | 4-6 GB | OS + Nginx |
+
+### Skrypty operacyjne
+
+| Skrypt | Opis |
+|--------|------|
+| `scripts/deploy/deploy.sh` | Deployment (git pull + rebuild + restart) |
+| `scripts/deploy/backup.sh` | Backup wszystkich baz (cron: 3:00 daily) |
+| `scripts/deploy/restore.sh` | Przywracanie z backupu |
+| `scripts/deploy/import-data.sh` | Początkowy import danych |
+
+### Konfiguracja
+
+| Plik | Opis |
+|------|------|
+| `docker-compose.prod.yml` | Limity RAM, gunicorn, restart policy |
+| `nginx/moja-dzialka.conf` | Reverse proxy, SSL, rate limiting |
+| `.env.example` | Template zmiennych środowiskowych |
 
 ---
 
@@ -341,9 +415,12 @@ moja-dzialka/
 | Decyzja | Wybór |
 |---------|-------|
 | Region | Trójmiasto (Gdańsk, Gdynia, Sopot) |
+| Hosting | Hetzner CX53 (77.42.86.222) |
+| SSL | Cloudflare Origin Certificate |
 | 3D terrain | Na życzenie użytkownika przez rozmowę |
 | Lead capture | Zachęta do zapłaty LUB pozostawienia kontaktu |
-| Płatność | Model do zbadania (Stripe? Przelewy24? BLIK?) |
+| Płatność | Stripe (do skonfigurowania) |
+| Backup | Automatyczny, codzienny o 3:00 |
 
 ---
 
@@ -381,8 +458,10 @@ Lokalizacja: `/home/marcin/deepagents/`
 2. [x] ~~Agent-Doradca v1~~ (SYSTEM_PROMPT, narzędzia, diversity service)
 3. [x] ~~Architektura Software 3.0~~ (7-warstw pamięci, skills, state machine)
 4. [x] ~~Organizacja projektu~~ (dane w `data/ready-for-import/`, archiwum w `archive/`)
-5. [ ] Import do baz danych (`data/ready-for-import/` → PostGIS, Neo4j, Milvus)
-6. [ ] Testy E2E nowej architektury (API v2)
-7. [ ] Migracja frontendu na API v2
-8. [ ] Integracja płatności (Stripe/Przelewy24)
-9. [ ] Lead capture UI + analytics
+5. [x] ~~Architektura deployment~~ (docker-compose.prod.yml, nginx, skrypty backup/restore)
+6. [ ] **TERAZ:** Deploy na serwer + import danych
+7. [ ] Testy E2E nowej architektury (API v2)
+8. [ ] Migracja frontendu na API v2
+9. [ ] Integracja płatności (Stripe)
+10. [ ] Lead capture UI + analytics
+11. [ ] Monitoring (Grafana + Prometheus)
