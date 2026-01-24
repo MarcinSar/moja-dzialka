@@ -1,7 +1,16 @@
-version: '3.8'
+# moja-dzialka Docker Compose
+#
+# Usage:
+#   docker compose up -d                    # Start all services
+#   docker compose up -d --build            # Rebuild and start
+#   docker compose logs -f backend          # Follow backend logs
+#   docker compose down                     # Stop all
 
 services:
-  # PostgreSQL with PostGIS extension
+  # ==========================================================================
+  # DATABASES
+  # ==========================================================================
+
   postgres:
     image: postgis/postgis:16-3.4
     container_name: moja-dzialka-postgres
@@ -21,7 +30,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Neo4j Graph Database with Vector Index
   neo4j:
     image: neo4j:5.15-community
     container_name: moja-dzialka-neo4j
@@ -46,7 +54,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # MongoDB for leads and sessions
   mongo:
     image: mongo:7.0
     container_name: moja-dzialka-mongo
@@ -63,7 +70,6 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # Redis for caching and persistence
   redis:
     image: redis:7-alpine
     container_name: moja-dzialka-redis
@@ -77,6 +83,84 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  # ==========================================================================
+  # APPLICATION
+  # ==========================================================================
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: moja-dzialka-backend
+    environment:
+      - DEBUG=${DEBUG:-false}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=moja_dzialka
+      - POSTGRES_USER=app
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secret}
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-secretpassword}
+      - REDIS_URL=redis://redis:6379
+      - MONGO_URL=mongodb://mongo:27017
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PERSISTENCE_BACKEND=${PERSISTENCE_BACKEND:-redis}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app  # Hot reload in dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.celery
+    container_name: moja-dzialka-celery
+    environment:
+      - POSTGRES_HOST=postgres
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-secretpassword}
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: moja-dzialka-frontend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:
