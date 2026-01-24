@@ -61,6 +61,7 @@ archive/
 # -----------------------------------------------------------------------------
 data/ready-for-import/postgis/*.gpkg
 data/ready-for-import/neo4j/*.gpkg
+data/ready-for-import/neo4j/csv/
 data/ready-for-import/milvus/*.csv
 
 # Zachowaj README i strukturę
