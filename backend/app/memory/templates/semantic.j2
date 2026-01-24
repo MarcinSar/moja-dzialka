@@ -1,0 +1,85 @@
+{# Semantic Memory - Long-term user profile #}
+<buyer_context>
+    {% if semantic.buyer_profile.name %}
+    <buyer_name>{{ semantic.buyer_profile.name }}</buyer_name>
+    {% endif %}
+
+    {% if semantic.buyer_profile.budget_max or semantic.buyer_profile.budget_min %}
+    <budget>
+        {% if semantic.buyer_profile.budget_min and semantic.buyer_profile.budget_max %}
+        {{ semantic.buyer_profile.budget_min | format_price }} - {{ semantic.buyer_profile.budget_max | format_price }}
+        {% elif semantic.buyer_profile.budget_max %}
+        do {{ semantic.buyer_profile.budget_max | format_price }}
+        {% endif %}
+    </budget>
+    {% endif %}
+
+    {% if semantic.buyer_profile.preferred_cities %}
+    <preferred_cities>{{ semantic.buyer_profile.preferred_cities | join(', ') }}</preferred_cities>
+    {% endif %}
+
+    {% if semantic.buyer_profile.preferred_districts %}
+    <preferred_districts>{{ semantic.buyer_profile.preferred_districts | join(', ') }}</preferred_districts>
+    {% endif %}
+
+    {% if semantic.buyer_profile.avoided_districts %}
+    <avoided_districts>{{ semantic.buyer_profile.avoided_districts | join(', ') }}</avoided_districts>
+    {% endif %}
+
+    {% if semantic.buyer_profile.size_m2_min or semantic.buyer_profile.size_m2_max %}
+    <preferred_size>
+        {% if semantic.buyer_profile.size_m2_min and semantic.buyer_profile.size_m2_max %}
+        {{ semantic.buyer_profile.size_m2_min }} - {{ semantic.buyer_profile.size_m2_max }} m²
+        {% elif semantic.buyer_profile.size_m2_max %}
+        do {{ semantic.buyer_profile.size_m2_max }} m²
+        {% endif %}
+    </preferred_size>
+    {% endif %}
+
+    <priorities>
+        {% if semantic.buyer_profile.priority_quietness > 0.6 %}
+        - Cisza: WAŻNE ({{ (semantic.buyer_profile.priority_quietness * 100) | int }}%)
+        {% endif %}
+        {% if semantic.buyer_profile.priority_nature > 0.6 %}
+        - Natura: WAŻNE ({{ (semantic.buyer_profile.priority_nature * 100) | int }}%)
+        {% endif %}
+        {% if semantic.buyer_profile.priority_accessibility > 0.6 %}
+        - Dostępność: WAŻNE ({{ (semantic.buyer_profile.priority_accessibility * 100) | int }}%)
+        {% endif %}
+        {% if semantic.buyer_profile.priority_schools %}
+        - ⚠️ Ma dzieci - priorytet: SZKOŁY w okolicy
+        {% endif %}
+        {% if semantic.buyer_profile.priority_transport %}
+        - Ważna komunikacja publiczna
+        {% endif %}
+    </priorities>
+
+    {% if semantic.buyer_profile.purpose %}
+    <purpose>{{ semantic.buyer_profile.purpose }}</purpose>
+    {% endif %}
+
+    {% if semantic.investment_strategy.is_investor %}
+    <investor_profile>
+        Typ: {{ semantic.investment_strategy.strategy_type or 'nie określony' }}
+        Horyzont: {{ semantic.investment_strategy.timeline or 'nie określony' }}
+        Ryzyko: {{ semantic.investment_strategy.risk_tolerance }}
+    </investor_profile>
+    {% endif %}
+
+    {% if semantic.known_facts %}
+    <known_facts>
+        {% for fact in semantic.known_facts %}
+        - {{ fact }}
+        {% endfor %}
+    </known_facts>
+    {% endif %}
+
+    {% if semantic.total_sessions > 1 %}
+    <returning_user>
+        Sesji: {{ semantic.total_sessions }}
+        Pierwsza wizyta: {{ semantic.first_visit }}
+        Wyszukiwań: {{ semantic.total_searches }}
+        Zaangażowanie: {{ (semantic.engagement_score * 100) | int }}%
+    </returning_user>
+    {% endif %}
+</buyer_context>

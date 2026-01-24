@@ -7,6 +7,7 @@ Services:
 - vector_service: Milvus similarity search
 - graph_service: Neo4j knowledge graph
 - parcel_search: Hybrid search combining all sources
+- diversity: Diverse proposal selection for search results
 """
 
 from app.services.database import (
@@ -21,6 +22,13 @@ from app.services.spatial_service import spatial_service, SpatialSearchParams, B
 from app.services.vector_service import vector_service
 from app.services.graph_service import graph_service
 from app.services.parcel_search import hybrid_search, SearchPreferences, SearchResult
+from app.services.diversity import (
+    select_diverse_proposals,
+    parse_user_feedback,
+    format_proposal_for_display,
+    DiverseProposal,
+    UserFeedback,
+)
 
 __all__ = [
     # Database connections
@@ -37,9 +45,16 @@ __all__ = [
     "graph_service",
     "hybrid_search",
 
+    # Diversity
+    "select_diverse_proposals",
+    "parse_user_feedback",
+    "format_proposal_for_display",
+
     # Types
     "SpatialSearchParams",
     "BBoxSearchParams",
     "SearchPreferences",
     "SearchResult",
+    "DiverseProposal",
+    "UserFeedback",
 ]

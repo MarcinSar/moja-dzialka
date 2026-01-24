@@ -14,6 +14,7 @@ from loguru import logger
 from app.config import settings
 from app.services.database import check_all_connections, close_all_connections
 from app.api.conversation import router as conversation_router
+from app.api.conversation_v2 import router as conversation_v2_router
 from app.api.search import router as search_router
 from app.api.lidar import router as lidar_router
 
@@ -42,7 +43,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="moja-dzialka API",
     description="System rekomendacji dzialek budowlanych w województwie pomorskim",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -61,6 +62,7 @@ app.add_middleware(
 # =============================================================================
 
 app.include_router(conversation_router, prefix="/api/v1")
+app.include_router(conversation_v2_router, prefix="/api")  # New v2 at /api/v2/conversation
 app.include_router(search_router, prefix="/api/v1")
 app.include_router(lidar_router, prefix="/api/v1")
 
@@ -99,12 +101,20 @@ async def api_info():
     """API information and available endpoints."""
     return {
         "name": "moja-dzialka API",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "endpoints": {
-            "conversation": {
+            "conversation_v1": {
                 "websocket": "/api/v1/conversation/ws",
                 "chat": "POST /api/v1/conversation/chat",
                 "session": "GET /api/v1/conversation/session/{session_id}",
+            },
+            "conversation_v2": {
+                "websocket": "/api/v2/conversation/ws",
+                "chat": "POST /api/v2/conversation/chat",
+                "state": "GET /api/v2/conversation/user/{user_id}/state",
+                "history": "GET /api/v2/conversation/user/{user_id}/history",
+                "funnel": "GET /api/v2/conversation/user/{user_id}/funnel",
+                "note": "New architecture with 7-layer memory model",
             },
             "search": {
                 "search": "POST /api/v1/search/",

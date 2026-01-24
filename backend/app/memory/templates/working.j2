@@ -1,0 +1,82 @@
+{# Working Memory - Current session state #}
+<session_context>
+    <current_phase>{{ working.current_phase }}</current_phase>
+    <session_id>{{ working.session_id }}</session_id>
+
+    {% if working.current_phase == "DISCOVERY" %}
+    <discovery_progress>
+        Zbierz podstawowe informacje o użytkowniku:
+        - Lokalizacja: {% if workflow.funnel_progress.location_collected %}✓ {{ workflow.funnel_progress.known_location }}{% else %}❌ (PRIORYTET){% endif %}
+        - Budżet: {% if workflow.funnel_progress.budget_collected %}✓ {{ workflow.funnel_progress.known_budget_max | format_price }}{% else %}❌{% endif %}
+        - Powierzchnia: {% if workflow.funnel_progress.size_collected %}✓ {{ workflow.funnel_progress.known_size_range }}{% else %}❌{% endif %}
+        - Preferencje: {% if workflow.funnel_progress.preferences_collected %}✓{% else %}❌{% endif %}
+
+        {% if workflow.funnel_progress.is_ready_for_search() %}
+        ✅ Gotowe do wyszukiwania! Użyj propose_search_preferences
+        {% else %}
+        ⏳ Potrzeba więcej informacji. Prowadź naturalną rozmowę.
+        {% endif %}
+    </discovery_progress>
+
+    {% elif working.current_phase == "SEARCH" %}
+    <search_progress>
+        {% if not working.search_state.preferences_proposed %}
+        Krok 1: Zaproponuj preferencje → propose_search_preferences
+        {% elif not working.search_state.preferences_approved %}
+        Krok 2: Czekaj na potwierdzenie → approve_search_preferences
+        {% elif not working.search_state.search_executed %}
+        Krok 3: Wykonaj wyszukiwanie → execute_search
+        {% else %}
+        ✅ Pokazano {{ working.search_state.results_shown }} wyników
+        Iteracja: {{ working.search_state.search_iteration }}
+        {% if working.search_state.favorited_parcels %}
+        Polubione: {{ working.search_state.favorited_parcels | join(', ') }}
+        {% endif %}
+        {% endif %}
+    </search_progress>
+
+    {% elif working.current_phase == "EVALUATION" %}
+    <evaluation_progress>
+        Użytkownik ocenia działki.
+        Pokazano: {{ workflow.funnel_progress.parcels_shown_count }} działek
+        Polubione: {{ workflow.funnel_progress.favorites_count }}
+
+        Dostępne akcje:
+        - Pokaż szczegóły działki → get_parcel_details
+        - Znajdź podobne → find_similar_parcels
+        - Porównaj działki (opisowo)
+        - Oszacuj wartość → estimate_parcel_value
+    </evaluation_progress>
+
+    {% elif working.current_phase == "NEGOTIATION" %}
+    <negotiation_progress>
+        Użytkownik wybrał działkę.
+        {% if workflow.funnel_progress.price_discussed %}
+        ✓ Cena omówiona
+        {% else %}
+        → Omów cenę i wartość działki
+        {% endif %}
+    </negotiation_progress>
+
+    {% elif working.current_phase == "LEAD_CAPTURE" %}
+    <lead_capture_progress>
+        {% if workflow.funnel_progress.contact_captured %}
+        ✅ Kontakt zebrany
+        {% else %}
+        → Zachęć do pozostawienia kontaktu lub zakupu pakietu
+        {% endif %}
+    </lead_capture_progress>
+
+    {% elif working.current_phase == "RETENTION" %}
+    <retention_context>
+        Powracający użytkownik!
+        Poprzednie ulubione: {{ episodic.all_time_favorites | join(', ') or 'brak' }}
+        Sesje: {{ semantic.total_sessions }}
+    </retention_context>
+    {% endif %}
+
+    <engagement>
+        Poziom: {{ workflow.funnel_progress.engagement_level }}
+        Pewność intencji: {{ (workflow.funnel_progress.intent_confidence * 100) | int }}%
+    </engagement>
+</session_context>

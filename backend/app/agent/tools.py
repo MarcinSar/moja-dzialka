@@ -681,6 +681,77 @@ Użyj gdy chcesz pokazać użytkownikowi lokalizacje działek na mapie.
             "required": ["parcel_ids"]
         }
     },
+
+    # =============== PRICE TOOLS ===============
+    {
+        "name": "get_district_prices",
+        "description": """
+Pobierz informacje o cenach działek w dzielnicy.
+
+Zwraca:
+- Przedział cenowy (min-max zł/m²)
+- Segment cenowy (ULTRA_PREMIUM, PREMIUM, HIGH, MEDIUM, BUDGET, ECONOMY)
+- Opis charakterystyki dzielnicy
+
+UŻYWAJ gdy:
+- User pyta "ile kosztują działki w X?"
+- Chcesz doradzić userowi o budżecie
+- Porównujesz dzielnice cenowo
+
+Przykład: "Osowa to segment MEDIUM, 600-740 zł/m². Za działkę 1000m² zapłacisz 600-740k zł."
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "Miasto (Gdańsk, Gdynia, Sopot)"
+                },
+                "district": {
+                    "type": "string",
+                    "description": "Dzielnica (opcjonalna - jeśli nie podana, zwraca średnią dla miasta)"
+                }
+            },
+            "required": ["city"]
+        }
+    },
+    {
+        "name": "estimate_parcel_value",
+        "description": """
+Oszacuj wartość działki na podstawie lokalizacji i powierzchni.
+
+Zwraca:
+- Szacowany przedział cenowy (min-max zł)
+- Cenę za m²
+- Segment cenowy
+- Poziom pewności oszacowania
+
+UŻYWAJ gdy:
+- User pyta "ile może kosztować ta działka?"
+- Prezentujesz wyniki wyszukiwania z cenami
+- Porównujesz wartości działek
+
+WAŻNE: To są ORIENTACYJNE ceny rynkowe, nie ceny ofertowe. Zawsze zaznacz to userowi.
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "Miasto (Gdańsk, Gdynia, Sopot)"
+                },
+                "district": {
+                    "type": "string",
+                    "description": "Dzielnica (opcjonalna)"
+                },
+                "area_m2": {
+                    "type": "number",
+                    "description": "Powierzchnia działki w m²"
+                }
+            },
+            "required": ["city", "area_m2"]
+        }
+    },
 ]
 
 
@@ -745,6 +816,12 @@ async def execute_tool(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]
         # Map tools
         elif tool_name == "generate_map_data":
             return await _generate_map_data(params)
+
+        # Price tools
+        elif tool_name == "get_district_prices":
+            return await _get_district_prices(params)
+        elif tool_name == "estimate_parcel_value":
+            return await _estimate_parcel_value(params)
 
         else:
             return {"error": f"Unknown tool: {tool_name}"}
@@ -1771,4 +1848,195 @@ async def _generate_map_data(params: Dict[str, Any]) -> Dict[str, Any]:
         "geojson": {"type": "FeatureCollection", "features": features},
         "center": {"lat": center_lat, "lon": center_lon},
         "parcel_count": len(features),
+    }
+
+
+# --------------- PRICE IMPLEMENTATIONS ---------------
+
+# District price data (from egib/scripts/pipeline/07a_district_prices.py)
+DISTRICT_PRICES = {
+    # Gdańsk - Premium
+    ("Gdańsk", "Jelitkowo"): {"min": 1500, "max": 2000, "segment": "PREMIUM", "desc": "Najdroższa dzielnica, blisko morza"},
+    ("Gdańsk", "Śródmieście"): {"min": 1200, "max": 2000, "segment": "PREMIUM", "desc": "Centrum miasta"},
+    ("Gdańsk", "Oliwa"): {"min": 1000, "max": 1500, "segment": "HIGH", "desc": "Prestiżowa dzielnica, las"},
+    ("Gdańsk", "Brzeźno"): {"min": 1000, "max": 1500, "segment": "HIGH", "desc": "Blisko plaży"},
+    # Gdańsk - Medium
+    ("Gdańsk", "Wrzeszcz"): {"min": 600, "max": 750, "segment": "MEDIUM", "desc": "Centrum komunikacyjne"},
+    ("Gdańsk", "Zaspa"): {"min": 650, "max": 900, "segment": "MEDIUM", "desc": "Dobra komunikacja"},
+    ("Gdańsk", "Przymorze"): {"min": 700, "max": 1000, "segment": "HIGH", "desc": "Blisko morza"},
+    ("Gdańsk", "Kokoszki"): {"min": 600, "max": 700, "segment": "MEDIUM", "desc": "Rozwijająca się, popularna"},
+    ("Gdańsk", "Osowa"): {"min": 600, "max": 740, "segment": "MEDIUM", "desc": "Przy TPK, spokojna"},
+    ("Gdańsk", "Jasień"): {"min": 600, "max": 800, "segment": "MEDIUM", "desc": "Popularna, dużo ofert"},
+    ("Gdańsk", "Olszynka"): {"min": 500, "max": 650, "segment": "MEDIUM", "desc": "Dostępna cenowo"},
+    ("Gdańsk", "VII Dwór"): {"min": 550, "max": 700, "segment": "MEDIUM", "desc": "Cicha, zielona"},
+    ("Gdańsk", "Matemblewo"): {"min": 500, "max": 700, "segment": "MEDIUM", "desc": "Przy TPK, spokój"},
+    # Gdańsk - Budget
+    ("Gdańsk", "Łostowice"): {"min": 370, "max": 500, "segment": "BUDGET", "desc": "Szybko rozwijająca się"},
+    ("Gdańsk", "Ujeścisko-Łostowice"): {"min": 370, "max": 500, "segment": "BUDGET", "desc": "Rozwijająca się"},
+    ("Gdańsk", "Chełm"): {"min": 400, "max": 550, "segment": "BUDGET", "desc": "Tańsza alternatywa"},
+    ("Gdańsk", "Orunia"): {"min": 400, "max": 550, "segment": "BUDGET", "desc": "Niższe ceny"},
+    ("Gdańsk", "Matarnia"): {"min": 450, "max": 600, "segment": "BUDGET", "desc": "Przy lotnisku"},
+    # Gdańsk fallback
+    ("Gdańsk", None): {"min": 500, "max": 900, "segment": "MEDIUM", "desc": "Średnia dla Gdańska"},
+
+    # Gdynia - Premium
+    ("Gdynia", "Kamienna Góra"): {"min": 5000, "max": 15000, "segment": "ULTRA_PREMIUM", "desc": "Najbardziej prestiżowa"},
+    ("Gdynia", "Orłowo"): {"min": 1800, "max": 2500, "segment": "PREMIUM", "desc": "Klif, wille, plaża"},
+    ("Gdynia", "Śródmieście"): {"min": 1500, "max": 3000, "segment": "PREMIUM", "desc": "Centrum, bulwar"},
+    ("Gdynia", "Redłowo"): {"min": 1500, "max": 2500, "segment": "PREMIUM", "desc": "Prestiżowa dzielnica"},
+    # Gdynia - High
+    ("Gdynia", "Mały Kack"): {"min": 900, "max": 1400, "segment": "HIGH", "desc": "Dobra komunikacja"},
+    ("Gdynia", "Działki Leśne"): {"min": 900, "max": 1200, "segment": "HIGH", "desc": "Zieleń, spokój"},
+    ("Gdynia", "Grabówek"): {"min": 800, "max": 1200, "segment": "HIGH", "desc": "Blisko centrum"},
+    # Gdynia - Medium/Budget
+    ("Gdynia", "Wielki Kack"): {"min": 500, "max": 900, "segment": "MEDIUM", "desc": "Tańsza alternatywa"},
+    ("Gdynia", "Wiczlino"): {"min": 400, "max": 800, "segment": "BUDGET", "desc": "Rozwijająca się"},
+    ("Gdynia", "Chwarzno-Wiczlino"): {"min": 400, "max": 800, "segment": "BUDGET", "desc": "Rozwijająca się"},
+    ("Gdynia", "Chylonia"): {"min": 600, "max": 1000, "segment": "MEDIUM", "desc": "Zróżnicowana"},
+    ("Gdynia", "Obłuże"): {"min": 600, "max": 1000, "segment": "MEDIUM", "desc": "Tańsza opcja"},
+    ("Gdynia", "Pogórze"): {"min": 500, "max": 900, "segment": "MEDIUM", "desc": "Najtańsze w Gdyni"},
+    # Gdynia fallback
+    ("Gdynia", None): {"min": 600, "max": 1000, "segment": "MEDIUM", "desc": "Średnia dla Gdyni"},
+
+    # Sopot
+    ("Sopot", "Dolny Sopot"): {"min": 4000, "max": 8000, "segment": "ULTRA_PREMIUM", "desc": "Przy Monte Cassino"},
+    ("Sopot", "Karlikowo"): {"min": 3000, "max": 5000, "segment": "ULTRA_PREMIUM", "desc": "Luksusowa, wille"},
+    ("Sopot", "Kamienny Potok"): {"min": 2500, "max": 4000, "segment": "PREMIUM", "desc": "Spokojna lokalizacja"},
+    ("Sopot", "Górny Sopot"): {"min": 2000, "max": 3500, "segment": "PREMIUM", "desc": "Rodzinna, zieleń"},
+    ("Sopot", "Brodwino"): {"min": 1500, "max": 2500, "segment": "PREMIUM", "desc": "Najtańsza w Sopocie"},
+    # Sopot fallback
+    ("Sopot", None): {"min": 2000, "max": 3500, "segment": "PREMIUM", "desc": "Średnia dla Sopotu"},
+
+    # Okolice
+    ("Chwaszczyno", None): {"min": 400, "max": 550, "segment": "BUDGET", "desc": "14km od Gdyni"},
+    ("Pruszcz Gdański", None): {"min": 300, "max": 400, "segment": "BUDGET", "desc": "10km od Gdańska"},
+    ("Żukowo", None): {"min": 170, "max": 300, "segment": "ECONOMY", "desc": "20km od Gdyni"},
+    ("Rumia", None): {"min": 300, "max": 600, "segment": "BUDGET", "desc": "15km od Gdyni"},
+    ("Kolbudy", None): {"min": 150, "max": 350, "segment": "ECONOMY", "desc": "15km od Gdańska"},
+}
+
+SEGMENT_DESCRIPTIONS = {
+    "ULTRA_PREMIUM": ">3000 zł/m² - najbardziej prestiżowe lokalizacje",
+    "PREMIUM": "1500-3000 zł/m² - dzielnice premium",
+    "HIGH": "800-1500 zł/m² - drogie dzielnice",
+    "MEDIUM": "500-800 zł/m² - średnia półka",
+    "BUDGET": "300-500 zł/m² - przystępne ceny",
+    "ECONOMY": "<300 zł/m² - najtańsze lokalizacje",
+}
+
+
+async def _get_district_prices(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Get price information for a district."""
+    city = params.get("city", "").strip()
+    district = params.get("district")
+
+    if not city:
+        return {"error": "Podaj miasto (Gdańsk, Gdynia, Sopot)"}
+
+    # Normalize city name
+    city_normalized = city.title()
+    if city_normalized.startswith("M. "):
+        city_normalized = city_normalized[3:]
+
+    # Try exact match first
+    key = (city_normalized, district)
+    if key not in DISTRICT_PRICES:
+        # Try without district (city average)
+        key = (city_normalized, None)
+
+    if key not in DISTRICT_PRICES:
+        # Try case-insensitive district search
+        for (c, d), data in DISTRICT_PRICES.items():
+            if c.lower() == city_normalized.lower():
+                if district and d and d.lower() == district.lower():
+                    key = (c, d)
+                    break
+
+    if key not in DISTRICT_PRICES:
+        return {
+            "error": f"Brak danych cenowych dla {city}/{district or 'średnia'}",
+            "available_cities": ["Gdańsk", "Gdynia", "Sopot"],
+            "hint": "Podaj nazwę dzielnicy lub pomiń aby uzyskać średnią dla miasta",
+        }
+
+    data = DISTRICT_PRICES[key]
+    segment = data["segment"]
+
+    return {
+        "city": key[0],
+        "district": key[1] or "średnia dla miasta",
+        "price_per_m2_min": data["min"],
+        "price_per_m2_max": data["max"],
+        "price_range": f"{data['min']}-{data['max']} zł/m²",
+        "segment": segment,
+        "segment_description": SEGMENT_DESCRIPTIONS.get(segment, ""),
+        "description": data["desc"],
+        "example_1000m2": f"{data['min'] * 1000 // 1000}k-{data['max'] * 1000 // 1000}k zł",
+        "note": "To są orientacyjne ceny rynkowe, nie ceny konkretnych ofert.",
+    }
+
+
+async def _estimate_parcel_value(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Estimate parcel value based on location and area."""
+    city = params.get("city", "").strip()
+    district = params.get("district")
+    area_m2 = params.get("area_m2")
+
+    if not city:
+        return {"error": "Podaj miasto (Gdańsk, Gdynia, Sopot)"}
+    if not area_m2 or area_m2 <= 0:
+        return {"error": "Podaj powierzchnię działki w m²"}
+
+    # Normalize city name
+    city_normalized = city.title()
+    if city_normalized.startswith("M. "):
+        city_normalized = city_normalized[3:]
+
+    # Find price data
+    key = (city_normalized, district)
+    if key not in DISTRICT_PRICES:
+        key = (city_normalized, None)
+
+    # Try case-insensitive search
+    if key not in DISTRICT_PRICES:
+        for (c, d), data in DISTRICT_PRICES.items():
+            if c.lower() == city_normalized.lower():
+                if district and d and d.lower() == district.lower():
+                    key = (c, d)
+                    break
+
+    if key not in DISTRICT_PRICES:
+        return {
+            "error": f"Brak danych cenowych dla {city}/{district or 'średnia'}",
+            "hint": "Podaj nazwę dzielnicy lub pomiń aby uzyskać średnią dla miasta",
+        }
+
+    data = DISTRICT_PRICES[key]
+    price_min = int(area_m2 * data["min"])
+    price_max = int(area_m2 * data["max"])
+    segment = data["segment"]
+
+    # Format prices nicely
+    def format_price(p):
+        if p >= 1_000_000:
+            return f"{p / 1_000_000:.2f} mln zł"
+        else:
+            return f"{p // 1000}k zł"
+
+    confidence = "HIGH" if key[1] else "MEDIUM"
+
+    return {
+        "city": key[0],
+        "district": key[1] or "średnia dla miasta",
+        "area_m2": area_m2,
+        "price_per_m2_min": data["min"],
+        "price_per_m2_max": data["max"],
+        "estimated_value_min": price_min,
+        "estimated_value_max": price_max,
+        "estimated_range": f"{format_price(price_min)} - {format_price(price_max)}",
+        "segment": segment,
+        "segment_description": SEGMENT_DESCRIPTIONS.get(segment, ""),
+        "confidence": confidence,
+        "note": "To jest ORIENTACYJNA wycena na podstawie średnich cen w dzielnicy. "
+                "Faktyczna cena zależy od: kształtu działki, uzbrojenia, MPZP, dostępu do drogi.",
     }

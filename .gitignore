@@ -1,10 +1,18 @@
+# =============================================================================
+# moja-dzialka .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
 # Python
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
 venv/
+.venv/
+env/
 .env
 *.egg-info/
 dist/
@@ -12,48 +20,100 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.ruff_cache/
 
-# Node
+# -----------------------------------------------------------------------------
+# Node / Frontend
+# -----------------------------------------------------------------------------
 node_modules/
 npm-debug.log*
 .next/
 out/
+.turbo/
 
+# -----------------------------------------------------------------------------
 # IDE
+# -----------------------------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.settings/
 
+# -----------------------------------------------------------------------------
 # OS
+# -----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# Data files (large - not tracked)
-data/raw/
-data/cleaned/
-data/processed/
-data/dev/
+# -----------------------------------------------------------------------------
+# ARCHIWUM - Surowe dane i przestarzałe pliki (4.4 GB)
+# -----------------------------------------------------------------------------
+archive/
+
+# -----------------------------------------------------------------------------
+# DANE DO IMPORTU - Przetworzone pliki GPKG/CSV (488 MB)
+# Zachowaj strukturę katalogów, ale nie dane
+# -----------------------------------------------------------------------------
+data/ready-for-import/postgis/*.gpkg
+data/ready-for-import/neo4j/*.gpkg
+data/ready-for-import/milvus/*.csv
+
+# Zachowaj README i strukturę
+!data/ready-for-import/README.md
+!data/ready-for-import/.gitkeep
+!data/ready-for-import/postgis/.gitkeep
+!data/ready-for-import/neo4j/.gitkeep
+!data/ready-for-import/milvus/.gitkeep
+
+# -----------------------------------------------------------------------------
+# EGIB - Przetworzone dane i cache
+# -----------------------------------------------------------------------------
+egib/data/processed/*.gpkg
+egib/data/processed/*.csv
+egib/data/bdot10k_trojmiasto/*.gpkg
+egib/cache/
+egib/files/
+
+# Zachowaj strukturę
+!egib/data/processed/.gitkeep
+!egib/data/bdot10k_trojmiasto/.gitkeep
+
+# -----------------------------------------------------------------------------
+# Duże pliki danych (ogólne)
+# -----------------------------------------------------------------------------
 *.gpkg
 *.parquet
 *.npy
 *.h5
 *.feather
+*.pbf
+*.osm
+*.gml
+*.zip
+*.xlsx
 
-# Keep data directory structure
-!data/.gitkeep
-
-# Logs
+# -----------------------------------------------------------------------------
+# Logi i pliki tymczasowe
+# -----------------------------------------------------------------------------
 *.log
 logs/
 *.tmp
+*.temp
 
+# -----------------------------------------------------------------------------
 # Docker
+# -----------------------------------------------------------------------------
 docker-compose.override.yml
 volumes/
 
-# Secrets
+# -----------------------------------------------------------------------------
+# Secrets i credentials
+# -----------------------------------------------------------------------------
 .env.local
 .env.*.local
 *.pem
@@ -61,18 +121,22 @@ volumes/
 credentials.json
 secrets/
 
+# -----------------------------------------------------------------------------
 # Jupyter
+# -----------------------------------------------------------------------------
 .ipynb_checkpoints/
 
-# Neo4j KG courses (reference material, not project code)
-grafy/
-
-# Claude Code internal
+# -----------------------------------------------------------------------------
+# Claude Code
+# -----------------------------------------------------------------------------
 .claude/
 
-# Raw data directories (large GeoPackage files)
-bdot10k/
-mpzp-pomorskie/
+# -----------------------------------------------------------------------------
+# Materiały referencyjne (nie są częścią projektu)
+# -----------------------------------------------------------------------------
+grafy/
 
-# External dependencies (cloned repos)
+# -----------------------------------------------------------------------------
+# Zewnętrzne zależności
+# -----------------------------------------------------------------------------
 semantica/

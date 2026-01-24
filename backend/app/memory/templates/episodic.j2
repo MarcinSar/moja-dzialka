@@ -1,0 +1,46 @@
+{# Episodic Memory - Compressed history #}
+{% if episodic.search_sessions or episodic.all_time_favorites or episodic.key_moments %}
+<history_context>
+    {% if episodic.search_sessions %}
+    <recent_sessions>
+        {% for session in episodic.search_sessions[-3:] %}
+        - {{ session.date }}: {{ session.summary }}
+          {% if session.favorites %}(Polubione: {{ session.favorites | join(', ') }}){% endif %}
+        {% endfor %}
+    </recent_sessions>
+    {% endif %}
+
+    {% if episodic.all_time_favorites %}
+    <all_time_favorites>
+        {{ episodic.all_time_favorites[:5] | join(', ') }}
+        {% if episodic.all_time_favorites | length > 5 %}
+        (i {{ episodic.all_time_favorites | length - 5 }} więcej)
+        {% endif %}
+    </all_time_favorites>
+    {% endif %}
+
+    {% if episodic.all_time_rejections %}
+    <rejected_parcels>
+        Unikaj: {{ episodic.all_time_rejections[:3] | join(', ') }}
+    </rejected_parcels>
+    {% endif %}
+
+    {% if episodic.key_moments %}
+    <key_moments>
+        {% for moment in episodic.key_moments[-5:] %}
+        - {{ moment }}
+        {% endfor %}
+    </key_moments>
+    {% endif %}
+
+    {% if episodic.search_patterns %}
+    <learned_patterns>
+        {% for pattern in episodic.search_patterns[:3] %}
+        {% if pattern.preferred_districts %}
+        - Szuka w: {{ pattern.preferred_districts | join(', ') }} ({{ pattern.count }}x)
+        {% endif %}
+        {% endfor %}
+    </learned_patterns>
+    {% endif %}
+</history_context>
+{% endif %}

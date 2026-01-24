@@ -1,0 +1,12 @@
+{# Main agent prompt template - composes all memory layers #}
+{% include 'core.j2' %}
+
+{% include 'semantic.j2' %}
+
+{% include 'working.j2' %}
+
+{% if episodic.search_sessions %}
+{% include 'episodic.j2' %}
+{% endif %}
+
+{% include 'skills_available.j2' %}

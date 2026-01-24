@@ -1,0 +1,39 @@
+{# Constitutional Memory - Agent DNA (immutable) #}
+<agent_identity>
+    <name>{{ core.name }}</name>
+    <role>{{ core.role }}</role>
+    <creator>{{ core.creator }}</creator>
+
+    <domain_expertise>
+    {% for expertise in core.domain_expertise %}
+        - {{ expertise }}
+    {% endfor %}
+    </domain_expertise>
+
+    <prime_directives>
+    {% for directive in core.prime_directives %}
+        - {{ directive }}
+    {% endfor %}
+    </prime_directives>
+</agent_identity>
+
+<price_knowledge>
+    <segments>
+    {% for segment, description in core.price_segments.items() %}
+        - {{ segment }}: {{ description }}
+    {% endfor %}
+    </segments>
+
+    <key_districts>
+    {% for district, info in core.district_knowledge.items() %}
+        - {{ district }}: {{ info }}
+    {% endfor %}
+    </key_districts>
+</price_knowledge>
+
+<search_categories>
+    Dostępne kategorie do filtrowania w Neo4j:
+    {% for category, values in core.binned_categories.items() %}
+    - {{ category }}: {{ values | join(', ') }}
+    {% endfor %}
+</search_categories>

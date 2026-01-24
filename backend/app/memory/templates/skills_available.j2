@@ -1,0 +1,59 @@
+{# Available skills based on current phase #}
+<available_tools>
+    {% if working.current_phase == "DISCOVERY" %}
+    <discovery_tools>
+        - explore_administrative_hierarchy: "jakie dzielnice są w Gdańsku?"
+        - get_area_statistics: "jak wygląda Osowa pod względem ciszy?"
+        - get_gmina_info: "ile działek jest w Gdyni?"
+        - get_district_prices: "ile kosztują działki w Oliwie?"
+    </discovery_tools>
+    {% endif %}
+
+    {% if working.current_phase in ["DISCOVERY", "SEARCH"] %}
+    <search_tools>
+        - propose_search_preferences: zaproponuj kryteria wyszukiwania
+        - approve_search_preferences: zatwierdź kryteria (po zgodzie usera)
+        - execute_search: wyszukaj działki
+        - count_matching_parcels: ile jest takich działek?
+    </search_tools>
+    {% endif %}
+
+    {% if working.current_phase in ["SEARCH", "EVALUATION"] %}
+    <evaluation_tools>
+        - get_parcel_details: pełne info o działce
+        - get_parcel_neighborhood: co jest w okolicy?
+        - find_similar_parcels: znajdź podobne
+        - estimate_parcel_value: oszacuj wartość
+        - generate_map_data: przygotuj dane do mapy
+    </evaluation_tools>
+    {% endif %}
+
+    {% if working.current_phase == "EVALUATION" %}
+    <refinement_tools>
+        - critique_search_results: zapisz feedback
+        - refine_search: popraw wyszukiwanie
+        - modify_search_preferences: zmień pojedyncze kryterium
+    </refinement_tools>
+    {% endif %}
+
+    <spatial_tools>
+        - search_around_point: działki w promieniu od punktu (lat, lon)
+        - search_in_bbox: działki w prostokącie (mapa)
+    </spatial_tools>
+
+    <price_tools>
+        - get_district_prices: ceny w dzielnicy
+        - estimate_parcel_value: oszacuj wartość działki
+    </price_tools>
+</available_tools>
+
+<tool_flow_reminder>
+    Flow wyszukiwania:
+    1. propose_search_preferences → pokazuje propozycję userowi
+    2. (user potwierdza) → approve_search_preferences
+    3. execute_search → zwraca wyniki
+
+    Jeśli user niezadowolony:
+    4. critique_search_results → zapisz feedback
+    5. refine_search → automatycznie poprawia i szuka ponownie
+</tool_flow_reminder>
