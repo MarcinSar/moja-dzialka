@@ -107,7 +107,7 @@ async def search_parcels(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/similar/{parcel_id}", response_model=SearchResponse)
+@router.get("/similar/{parcel_id:path}", response_model=SearchResponse)
 async def find_similar(
     parcel_id: str,
     limit: int = Query(10, ge=1, le=50),
@@ -165,7 +165,7 @@ async def find_similar(
 # PARCEL DETAILS
 # =============================================================================
 
-@router.get("/parcel/{parcel_id}", response_model=ParcelDetails)
+@router.get("/parcel/{parcel_id:path}", response_model=ParcelDetails)
 async def get_parcel_details(
     parcel_id: str,
     include_geometry: bool = Query(True),

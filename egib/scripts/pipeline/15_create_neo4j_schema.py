@@ -73,6 +73,11 @@ def create_constraints(session):
         ("DensityCategory", "id"),
         ("WaterType", "id"),
         ("PriceSegment", "id"),
+        # Entity Resolution nodes (2026-01-25)
+        ("LocationName", "id"),
+        ("SemanticCategory", "id"),
+        ("WaterTypeName", "id"),
+        ("POITypeName", "id"),
     ]
 
     for label, prop in constraints:
@@ -133,6 +138,51 @@ def create_indexes(session):
         ON (w.{prop})
         """
         run_query(session, query, description=f"Index Water.{prop}")
+
+    # Fulltext indexes for fuzzy location search (Neo4j native)
+    logger.info("\n  Creating fulltext indexes for fuzzy search...")
+
+    # Fulltext on District.name - for fuzzy matching "mateblewo" → "Matemblewo"
+    query = """
+    CREATE FULLTEXT INDEX district_names_ft IF NOT EXISTS
+    FOR (d:District) ON EACH [d.name]
+    """
+    run_query(session, query, description="Fulltext Index District.name")
+
+    # Fulltext on City.name - for fuzzy matching city names
+    query = """
+    CREATE FULLTEXT INDEX city_names_ft IF NOT EXISTS
+    FOR (c:City) ON EACH [c.name]
+    """
+    run_query(session, query, description="Fulltext Index City.name")
+
+    # Fulltext on Parcel.dzielnica + gmina - for fast location search
+    query = """
+    CREATE FULLTEXT INDEX parcel_locations_ft IF NOT EXISTS
+    FOR (p:Parcel) ON EACH [p.dzielnica, p.gmina]
+    """
+    run_query(session, query, description="Fulltext Index Parcel locations")
+
+    # =========================================================================
+    # Vector indexes for Entity Resolution (2026-01-25)
+    # Model: distiluse-base-multilingual-cased (512 dimensions)
+    # =========================================================================
+    logger.info("\n  Creating vector indexes for entity embeddings (512-dim)...")
+
+    vector_indexes = [
+        ("location_name_embedding_idx", "LocationName", "embedding"),
+        ("semantic_category_embedding_idx", "SemanticCategory", "embedding"),
+        ("water_type_name_embedding_idx", "WaterTypeName", "embedding"),
+        ("poi_type_name_embedding_idx", "POITypeName", "embedding"),
+    ]
+
+    for idx_name, label, prop in vector_indexes:
+        query = f"""
+        CREATE VECTOR INDEX {idx_name} IF NOT EXISTS
+        FOR (n:{label}) ON (n.{prop})
+        OPTIONS {{indexConfig: {{`vector.dimensions`: 512, `vector.similarity_function`: 'cosine'}}}}
+        """
+        run_query(session, query, description=f"Vector Index {idx_name}")
 
 
 def create_category_nodes(session):

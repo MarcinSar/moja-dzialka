@@ -38,8 +38,8 @@ services:
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_memory_heap_initial__size: 2G
       NEO4J_dbms_memory_heap_max__size: 4G
-      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
-      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*,gds.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*,gds.*"
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -47,6 +47,7 @@ services:
       - neo4j_data:/data
       - neo4j_logs:/logs
       - ./data/ready-for-import/neo4j/csv:/var/lib/neo4j/import
+      - ./neo4j-plugins:/var/lib/neo4j/plugins
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
       interval: 10s

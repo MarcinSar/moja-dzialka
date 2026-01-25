@@ -152,6 +152,20 @@ class ToolExecutor:
             elif tool_name == "validate_location_combination":
                 result = await self._validate_location_combination(params)
                 return result, {}
+            # Semantic entity resolution (2026-01-25)
+            elif tool_name == "resolve_entity":
+                result = await self._resolve_entity(params, state)
+                return result, {}
+            # NEO4J V2 tools (2026-01-25)
+            elif tool_name == "find_adjacent_parcels":
+                result = await self._find_adjacent_parcels(params)
+                return result, {}
+            elif tool_name == "search_near_specific_poi":
+                result = await self._search_near_specific_poi(params)
+                return result, {}
+            elif tool_name == "find_similar_by_graph":
+                result = await self._find_similar_by_graph(params)
+                return result, {}
             else:
                 return {"error": f"Unknown tool: {tool_name}"}, {}
 
@@ -203,22 +217,32 @@ class ToolExecutor:
                             gmina_param = gmina_name
                             break
 
-                # Try dzielnica (district) - use resolve_location for full resolution
-                # FIXED 2026-01-25: Use resolve_location to find district AND its parent gmina
+                # Try dzielnica (district) - use resolve_location_v2 for semantic matching
+                # UPDATED 2026-01-25: Use resolve_location_v2 with vector embeddings
+                # This handles Matemblewo → Matarnia, VII Dwór → Oliwa/Wrzeszcz, etc.
                 if not miejscowosc_param:
-                    # Use resolve_location which searches ALL districts in ALL cities
-                    resolved = await graph_service.resolve_location(location_desc)
+                    # Use resolve_location_v2 which uses semantic embeddings
+                    resolved = await graph_service.resolve_location_v2(location_desc)
                     if resolved.get("resolved"):
-                        # Found a match - could be a city or a district
-                        if resolved.get("dzielnica"):
+                        # V2 returns richer information
+                        confidence = resolved.get("confidence", "MEDIUM")
+
+                        if resolved.get("maps_to_district"):
                             # It's a district - set both dzielnica and its parent gmina
-                            miejscowosc_param = resolved["dzielnica"]
-                            if not gmina_param and resolved.get("gmina"):
-                                gmina_param = resolved["gmina"]
-                            logger.info(f"Resolved '{location_desc}' to district: {miejscowosc_param} in {gmina_param}")
-                        elif resolved.get("miejscowosc") and not gmina_param:
-                            # It's a city/miejscowość - set as gmina (in MVP gmina=miejscowość)
-                            gmina_param = resolved["miejscowosc"]
+                            miejscowosc_param = resolved["maps_to_district"]
+                            if not gmina_param and resolved.get("maps_to_gmina"):
+                                gmina_param = resolved["maps_to_gmina"]
+                            logger.info(f"Resolved '{location_desc}' to district: {miejscowosc_param} in {gmina_param} (confidence: {confidence})")
+                        elif resolved.get("search_in_districts") and len(resolved["search_in_districts"]) > 0:
+                            # Location maps to multiple districts (e.g., VII Dwór → Oliwa, Wrzeszcz)
+                            # Use first as primary, others as fallback
+                            miejscowosc_param = resolved["search_in_districts"][0]
+                            if not gmina_param and resolved.get("maps_to_gmina"):
+                                gmina_param = resolved["maps_to_gmina"]
+                            logger.info(f"Resolved '{location_desc}' to districts: {resolved['search_in_districts']} in {gmina_param}")
+                        elif resolved.get("maps_to_gmina") and not gmina_param:
+                            # It's a city/miejscowość - set as gmina
+                            gmina_param = resolved["maps_to_gmina"]
                             logger.info(f"Resolved '{location_desc}' to city/gmina: {gmina_param}")
 
                 # Try powiat as last resort
@@ -266,6 +290,11 @@ class ToolExecutor:
             "quietness_weight": params.get("quietness_weight") if params.get("quietness_categories") else None,
             "nature_weight": params.get("nature_weight") if params.get("nature_categories") else None,
             "accessibility_weight": params.get("accessibility_weight") if params.get("accessibility_categories") else None,
+            # NEO4J V2: New filters (2026-01-25)
+            "ownership_type": params.get("ownership_type"),  # prywatna, publiczna, etc.
+            "build_status": params.get("build_status"),  # zabudowana, niezabudowana
+            "size_category": params.get("size_category"),  # mala, pod_dom, duza, bardzo_duza
+            "pog_residential": params.get("pog_residential"),  # Only residential POG zones
         }
 
         # Build human-readable summary
@@ -295,6 +324,27 @@ class ToolExecutor:
             env_prefs.append(f"zabudowa: {', '.join(preferences['building_density'])}")
         if env_prefs:
             summary["preferencje_środowiska"] = env_prefs
+
+        # NEO4J V2: New filter summaries (2026-01-25)
+        if preferences.get("ownership_type"):
+            ownership_labels = {
+                "prywatna": "prywatna (można kupić)",
+                "publiczna": "publiczna",
+                "spoldzielcza": "spółdzielcza",
+                "koscielna": "kościelna",
+                "inna": "inna"
+            }
+            summary["własność"] = ownership_labels.get(preferences["ownership_type"], preferences["ownership_type"])
+        if preferences.get("build_status"):
+            status_labels = {
+                "niezabudowana": "niezabudowana (pod budowę)",
+                "zabudowana": "zabudowana"
+            }
+            summary["status_zabudowy"] = status_labels.get(preferences["build_status"], preferences["build_status"])
+        if preferences.get("size_category"):
+            summary["kategoria_rozmiaru"] = ", ".join(preferences["size_category"])
+        if preferences.get("pog_residential"):
+            summary["tylko_mieszkaniowe_POG"] = "tak"
 
         result = {
             "status": "proposed",
@@ -426,6 +476,11 @@ class ToolExecutor:
             quietness_weight=prefs.get("quietness_weight"),
             nature_weight=prefs.get("nature_weight"),
             accessibility_weight=prefs.get("accessibility_weight"),
+            # NEO4J V2 filters (2026-01-25)
+            ownership_type=prefs.get("ownership_type"),
+            build_status=prefs.get("build_status"),
+            size_category=prefs.get("size_category"),
+            pog_residential=prefs.get("pog_residential"),
         )
 
         results = await hybrid_search.search(search_prefs, limit=limit, include_details=True)
@@ -580,9 +635,21 @@ class ToolExecutor:
                         diagnostics["blocking_filter"] = filter_name
                         diagnostics["message"] = f"W '{location}' nie ma działek z {polish_name}: {requested}. Dominuje: '{dominant[0]}' ({dominant[1]} działek)."
 
-                        # Relaxation suggestions
+                        # Relaxation suggestions with DYNAMIC district names from database
                         if filter_name == "quietness_categories" and dominant[0] == "głośna":
-                            diagnostics["suggestion"] = f"'{location}' to głośna okolica. Rozważ cichsze dzielnice (Matemblewo, VII Dwór, Osowa)."
+                            # Get quiet districts dynamically instead of hardcoding
+                            try:
+                                quiet_districts = await graph_service.get_quiet_districts(
+                                    gmina=prefs.get("gmina"),
+                                    limit=3
+                                )
+                                if quiet_districts:
+                                    district_names = ", ".join([d["name"] for d in quiet_districts])
+                                    diagnostics["suggestion"] = f"'{location}' to głośna okolica. Rozważ cichsze dzielnice ({district_names})."
+                                else:
+                                    diagnostics["suggestion"] = f"'{location}' to głośna okolica. Spróbuj innej lokalizacji."
+                            except Exception:
+                                diagnostics["suggestion"] = f"'{location}' to głośna okolica. Spróbuj innej lokalizacji."
                             diagnostics["relaxation"] = {"quietness_categories": None}
                         else:
                             diagnostics["suggestion"] = f"Zmień kryterium {polish_name} na '{dominant[0]}' lub usuń filtr."
@@ -1861,6 +1928,283 @@ class ToolExecutor:
         except Exception as e:
             logger.error(f"Validate location combination error: {e}")
             return {"valid": False, "error": str(e)}
+
+    async def _resolve_entity(self, params: Dict[str, Any], state: AgentState) -> Dict[str, Any]:
+        """
+        Universal entity resolution using semantic vector search.
+
+        Resolves user text to graph entities:
+        - location: "Matemblewo" → dzielnica Matarnia in Gdańsk
+        - quietness: "spokojna okolica" → ["bardzo_cicha", "cicha"]
+        - nature: "blisko lasu" → ["bardzo_zielona", "zielona"]
+        - water: "nad morzem" → water_type="morze"
+
+        Args:
+            params: {
+                "entity_type": "location" | "quietness" | "nature" | "accessibility" | "density" | "water" | "poi",
+                "user_text": Text to resolve
+            }
+            state: Agent state (not used currently but available for context)
+
+        Returns:
+            Dict with resolved entity information
+        """
+        entity_type = params.get("entity_type")
+        user_text = params.get("user_text")
+
+        if not entity_type or not user_text:
+            return {"error": "Wymagane parametry: entity_type, user_text"}
+
+        try:
+            if entity_type == "location":
+                result = await graph_service.resolve_location_v2(user_text)
+                if result.get("resolved"):
+                    return {
+                        "resolved": True,
+                        "type": "location",
+                        "canonical_name": result.get("canonical_name"),
+                        "maps_to_district": result.get("maps_to_district"),
+                        "maps_to_gmina": result.get("maps_to_gmina"),
+                        "search_in_districts": result.get("search_in_districts"),
+                        "price_segment": result.get("price_segment"),
+                        "confidence": result.get("confidence"),
+                        "similarity": result.get("similarity"),
+                        "alternatives": result.get("alternatives", []),
+                        "note": result.get("note"),
+                    }
+                else:
+                    return result
+
+            elif entity_type in ["quietness", "nature", "accessibility", "density"]:
+                result = await graph_service.resolve_semantic_category(user_text, entity_type)
+                if result.get("resolved"):
+                    return {
+                        "resolved": True,
+                        "type": entity_type,
+                        "matched_name": result.get("matched_name"),
+                        "values": result.get("values"),
+                        "similarity": result.get("similarity"),
+                        "hint": f"Użyj wartości {result.get('values')} w kryteriach wyszukiwania.",
+                    }
+                else:
+                    return result
+
+            elif entity_type == "water":
+                result = await graph_service.resolve_water_type(user_text)
+                if result.get("resolved"):
+                    return {
+                        "resolved": True,
+                        "type": "water",
+                        "water_type": result.get("water_type"),
+                        "canonical_name": result.get("canonical_name"),
+                        "premium_factor": result.get("premium_factor"),
+                        "similarity": result.get("similarity"),
+                        "hint": f"Bliskość {result.get('canonical_name')} zwiększa wartość działki o {(result.get('premium_factor', 1) - 1) * 100:.0f}%",
+                    }
+                else:
+                    return result
+
+            elif entity_type == "poi":
+                result = await graph_service.resolve_poi_type(user_text)
+                if result.get("resolved"):
+                    return {
+                        "resolved": True,
+                        "type": "poi",
+                        "poi_types": result.get("poi_types"),
+                        "canonical_name": result.get("canonical_name"),
+                        "similarity": result.get("similarity"),
+                    }
+                else:
+                    return result
+
+            else:
+                return {
+                    "error": f"Nieznany typ encji: {entity_type}",
+                    "valid_types": ["location", "quietness", "nature", "accessibility", "density", "water", "poi"]
+                }
+
+        except Exception as e:
+            logger.error(f"Resolve entity error: {e}")
+            return {"resolved": False, "error": str(e)}
+
+    # =========================================================================
+    # NEO4J V2: GRAPH TOOLS (2026-01-25)
+    # Adjacency, NEAR_* relations, graph embeddings
+    # =========================================================================
+
+    async def _find_adjacent_parcels(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Find parcels adjacent to the given parcel using ADJACENT_TO relation.
+
+        Uses 407,825 ADJACENT_TO relations with shared_border_m property.
+        """
+        raw_ref = params.get("parcel_id")
+        if not raw_ref:
+            return {"error": "Podaj parcel_id"}
+
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
+
+        limit = params.get("limit", 10)
+
+        try:
+            neighbors = await graph_service.find_adjacent_parcels(parcel_id, limit)
+
+            if not neighbors:
+                return {
+                    "parcel_id": parcel_id,
+                    "count": 0,
+                    "neighbors": [],
+                    "message": f"Nie znaleziono sąsiadów dla działki {parcel_id}",
+                    "hint": "Ta działka może być na granicy zbioru danych lub nie mieć relacji ADJACENT_TO."
+                }
+
+            # Format results
+            formatted = []
+            for n in neighbors:
+                formatted.append({
+                    "id": n.get("id"),
+                    "dzielnica": n.get("dzielnica"),
+                    "gmina": n.get("gmina"),
+                    "area_m2": n.get("area_m2"),
+                    "quietness_score": n.get("quietness_score"),
+                    "shared_border_m": round(n.get("shared_border_m", 0), 1),
+                    "is_built": n.get("is_built"),
+                })
+
+            total_border = sum(n.get("shared_border_m", 0) for n in neighbors)
+
+            return {
+                "parcel_id": parcel_id,
+                "count": len(neighbors),
+                "neighbors": formatted,
+                "total_shared_border_m": round(total_border, 1),
+                "message": f"Znaleziono {len(neighbors)} sąsiadujących działek (łączna granica: {total_border:.0f}m)",
+            }
+
+        except Exception as e:
+            logger.error(f"Find adjacent parcels error: {e}")
+            return {"error": str(e)}
+
+    async def _search_near_specific_poi(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Search parcels near a specific POI using NEAR_* relations.
+
+        Uses pre-computed NEAR_SCHOOL, NEAR_SHOP, NEAR_BUS_STOP, etc. relations.
+        """
+        poi_type = params.get("poi_type")
+        if not poi_type:
+            return {"error": "Podaj poi_type (school, shop, bus_stop, forest, water)"}
+
+        valid_types = ["school", "shop", "bus_stop", "forest", "water"]
+        if poi_type not in valid_types:
+            return {"error": f"Nieznany typ POI. Dostępne: {', '.join(valid_types)}"}
+
+        poi_name = params.get("poi_name")
+        max_distance_m = params.get("max_distance_m", 1000)
+        limit = params.get("limit", 20)
+
+        try:
+            results = await graph_service.search_near_poi(
+                poi_type=poi_type,
+                poi_name=poi_name,
+                max_distance_m=max_distance_m,
+                limit=limit
+            )
+
+            if not results:
+                msg = f"Nie znaleziono działek blisko {poi_type}"
+                if poi_name:
+                    msg += f" o nazwie '{poi_name}'"
+                msg += f" (max {max_distance_m}m)"
+                return {
+                    "poi_type": poi_type,
+                    "poi_name": poi_name,
+                    "count": 0,
+                    "results": [],
+                    "message": msg,
+                    "hint": "Spróbuj zwiększyć max_distance_m lub pominąć filtr nazwy."
+                }
+
+            formatted = []
+            for r in results:
+                formatted.append({
+                    "id": r.get("id"),
+                    "dzielnica": r.get("dzielnica"),
+                    "gmina": r.get("gmina"),
+                    "area_m2": r.get("area_m2"),
+                    "distance_m": round(r.get("distance_m", 0), 0),
+                    "poi_name": r.get("poi_name"),
+                    "quietness_score": r.get("quietness_score"),
+                })
+
+            poi_label = {"school": "szkoły", "shop": "sklepu", "bus_stop": "przystanku",
+                        "forest": "lasu", "water": "wody"}
+
+            return {
+                "poi_type": poi_type,
+                "poi_name": poi_name,
+                "max_distance_m": max_distance_m,
+                "count": len(results),
+                "results": formatted,
+                "message": f"Znaleziono {len(results)} działek blisko {poi_label.get(poi_type, poi_type)}" +
+                          (f" '{poi_name}'" if poi_name else ""),
+            }
+
+        except Exception as e:
+            logger.error(f"Search near POI error: {e}")
+            return {"error": str(e)}
+
+    async def _find_similar_by_graph(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Find structurally similar parcels using graph embeddings (256-dim FastRP).
+
+        Different from text similarity - captures graph structure (relations, neighborhood).
+        """
+        raw_ref = params.get("parcel_id")
+        if not raw_ref:
+            return {"error": "Podaj parcel_id"}
+
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
+
+        limit = params.get("limit", 10)
+
+        try:
+            similar = await graph_service.find_similar_by_graph_embedding(parcel_id, limit)
+
+            if not similar:
+                return {
+                    "parcel_id": parcel_id,
+                    "count": 0,
+                    "similar_parcels": [],
+                    "message": f"Nie znaleziono podobnych działek dla {parcel_id}",
+                    "hint": "Ta działka może nie mieć graph_embedding lub brak podobnych w bazie."
+                }
+
+            formatted = []
+            for s in similar:
+                formatted.append({
+                    "id": s.get("id"),
+                    "dzielnica": s.get("dzielnica"),
+                    "gmina": s.get("gmina"),
+                    "area_m2": s.get("area_m2"),
+                    "quietness_score": s.get("quietness_score"),
+                    "nature_score": s.get("nature_score"),
+                    "similarity": round(s.get("similarity", 0), 3),
+                    "is_built": s.get("is_built"),
+                })
+
+            return {
+                "parcel_id": parcel_id,
+                "count": len(similar),
+                "similar_parcels": formatted,
+                "message": f"Znaleziono {len(similar)} strukturalnie podobnych działek",
+                "note": "Podobieństwo oparte na strukturze grafu (relacje, sąsiedztwo), nie opisie tekstowym.",
+            }
+
+        except Exception as e:
+            logger.error(f"Find similar by graph error: {e}")
+            return {"error": str(e)}
 
 
 # =============================================================================

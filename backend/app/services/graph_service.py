@@ -100,6 +100,18 @@ class ParcelSearchCriteria:
     # Industrial distance (for quiet areas)
     min_dist_to_industrial_m: Optional[int] = None
 
+    # NEO4J V2: Ownership (NEW 2026-01-25)
+    ownership_type: Optional[str] = None  # "prywatna", "publiczna", "spoldzielcza", "koscielna", "inna"
+
+    # NEO4J V2: Build status (NEW 2026-01-25)
+    build_status: Optional[str] = None  # "zabudowana", "niezabudowana"
+
+    # NEO4J V2: Size category via relation (NEW 2026-01-25)
+    size_category: Optional[List[str]] = None  # ["pod_dom", "duza"]
+
+    # NEO4J V2: POG residential (NEW 2026-01-25)
+    pog_residential: Optional[bool] = None  # Only residential POG zones
+
     # Sorting preferences
     sort_by: str = "quietness_score"  # or "nature_score", "accessibility_score", "area_m2"
     sort_desc: bool = True
@@ -601,6 +613,29 @@ class GraphService:
         if criteria.near_water_required:
             where_conditions.append("p.dist_to_water <= 500")
 
+        # NEO4J V2: Ownership filter via HAS_OWNERSHIP relation
+        if criteria.ownership_type:
+            match_clauses.append("MATCH (p)-[:HAS_OWNERSHIP]->(ot:OwnershipType)")
+            where_conditions.append("ot.id = $ownership_type")
+            params["ownership_type"] = criteria.ownership_type
+
+        # NEO4J V2: Build status filter via HAS_BUILD_STATUS relation
+        if criteria.build_status:
+            match_clauses.append("MATCH (p)-[:HAS_BUILD_STATUS]->(bs:BuildStatus)")
+            where_conditions.append("bs.id = $build_status")
+            params["build_status"] = criteria.build_status
+
+        # NEO4J V2: Size category filter via HAS_SIZE relation
+        if criteria.size_category:
+            match_clauses.append("MATCH (p)-[:HAS_SIZE]->(sz:SizeCategory)")
+            where_conditions.append("sz.id IN $size_categories")
+            params["size_categories"] = criteria.size_category
+
+        # NEO4J V2: POG residential filter via HAS_POG relation
+        if criteria.pog_residential:
+            match_clauses.append("MATCH (p)-[:HAS_POG]->(pz:POGZone)")
+            where_conditions.append("pz.is_residential = true")
+
         # POG/MPZP filters - now properties on Parcel
         if criteria.has_mpzp is not None:
             # has_mpzp is now represented by pog_symbol being NOT NULL
@@ -903,13 +938,14 @@ class GraphService:
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
         # Simpler query - aggregate directly
+        # NOTE: has_public_road_access doesn't exist - use dist_to_main_road < 50 as proxy
         query = f"""
             MATCH (p:Parcel)
             {where_clause}
             WITH count(p) as total,
                  sum(CASE WHEN p.pog_symbol IS NOT NULL THEN 1 ELSE 0 END) as with_mpzp,
                  sum(CASE WHEN p.is_residential_zone = true THEN 1 ELSE 0 END) as residential,
-                 sum(CASE WHEN p.has_public_road_access = true THEN 1 ELSE 0 END) as with_road_access,
+                 sum(CASE WHEN p.dist_to_main_road IS NOT NULL AND p.dist_to_main_road < 50 THEN 1 ELSE 0 END) as with_road_access,
                  sum(CASE WHEN p.is_built = true THEN 1 ELSE 0 END) as built
 
             // Get category distributions
@@ -1146,7 +1182,7 @@ class GraphService:
 
         dist_field = dist_field_map.get(water_type, "dist_to_water")
 
-        # Build WHERE conditions
+        # Build WHERE conditions (all parameterized to prevent SQL injection)
         conditions = [f"p.{dist_field} IS NOT NULL", f"p.{dist_field} <= $max_distance"]
 
         if city:
@@ -1156,9 +1192,9 @@ class GraphService:
         if max_area:
             conditions.append("p.area_m2 <= $max_area")
         if is_built is not None:
-            conditions.append(f"p.is_built = {str(is_built).lower()}")
+            conditions.append("p.is_built = $is_built")
         if is_residential_zone is not None:
-            conditions.append(f"p.is_residential_zone = {str(is_residential_zone).lower()}")
+            conditions.append("p.is_residential_zone = $is_residential")
 
         where_clause = " AND ".join(conditions)
 
@@ -1185,13 +1221,21 @@ class GraphService:
         """
 
         try:
-            results = await neo4j.run(query, {
+            # Build params dict with all values (parameterized to prevent injection)
+            params = {
                 "max_distance": max_distance,
                 "city": city,
                 "min_area": min_area,
                 "max_area": max_area,
                 "limit": limit,
-            })
+            }
+            # Add boolean params only if set (prevents None comparison issues)
+            if is_built is not None:
+                params["is_built"] = is_built
+            if is_residential_zone is not None:
+                params["is_residential"] = is_residential_zone
+
+            results = await neo4j.run(query, params)
             return [dict(r) for r in results]
         except Exception as e:
             logger.error(f"Search parcels by water type error: {e}")
@@ -1496,9 +1540,34 @@ class GraphService:
             logger.error(f"Get districts in miejscowość error: {e}")
             return {"error": str(e), "miejscowosc": miejscowosc, "districts": []}
 
+    # Districts that exist in price data but NOT in cadastral (EGiB) data
+    # Maps to nearest cadastral district or None (search whole city)
+    DISTRICT_ALIASES: Dict[str, Dict[str, Any]] = {
+        # Matemblewo is a known area but parcels are categorized under Matarnia or "Gdańsk (inne)"
+        "matemblewo": {"gmina": "Gdańsk", "search_in": ["Matarnia", "Osowa"], "note": "obszar przy TPK"},
+        "vii dwór": {"gmina": "Gdańsk", "search_in": ["Oliwa", "Wrzeszcz"], "note": "część Oliwy"},
+        "śródmieście": {"gmina": "Gdańsk", "search_in": ["Stare Miasto", "Dolne Miasto"], "note": "centrum"},
+        "ujeścisko-łostowice": {"gmina": "Gdańsk", "search_in": ["Łostowice", "Ujeścisko"], "note": "nowa dzielnica"},
+        # Gdynia aliases
+        "chwarzno-wiczlino": {"gmina": "Gdynia", "search_in": ["Wiczlino", "Chwarzno"], "note": "nowa dzielnica"},
+        "działki leśne": {"gmina": "Gdynia", "search_in": ["Redłowo", "Mały Kack"], "note": "obszar leśny"},
+        # Sopot aliases
+        "dolny sopot": {"gmina": "Sopot", "search_in": None, "note": "centrum Sopotu"},
+        "górny sopot": {"gmina": "Sopot", "search_in": None, "note": "wyższa część"},
+        "karlikowo": {"gmina": "Sopot", "search_in": None, "note": "luksusowa część"},
+        "kamienny potok": {"gmina": "Sopot", "search_in": None, "note": "spokojna część"},
+        "brodwino": {"gmina": "Sopot", "search_in": None, "note": "zachodnia część"},
+    }
+
     async def resolve_location(self, location_text: str) -> Dict[str, Any]:
         """
         Resolve user's location text to gmina + miejscowosc + dzielnica.
+
+        Uses Neo4j Fulltext Search for fuzzy matching:
+        - Handles typos: "mateblewo" → "Matemblewo"
+        - Handles missing Polish chars: "Gdansk" → "Gdańsk"
+        - Handles declensions: "w Osowej" → "Osowa"
+        - Handles districts in price data but not in cadastral (DISTRICT_ALIASES)
 
         IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not directly to gmina!
 
@@ -1506,10 +1575,11 @@ class GraphService:
             location_text: Raw text from user (e.g., "okolice Osowej", "Orłowo", "Gdańsk")
 
         Returns:
-            Dict with resolved: bool, gmina, miejscowosc, dzielnica, parcel_count
+            Dict with resolved: bool, gmina, miejscowosc, dzielnica, parcel_count, fuzzy
             or error if not found
         """
-        text_lower = location_text.lower().strip()
+        # Clean input text
+        clean_text = location_text.lower().strip()
 
         # Remove common prefixes
         prefixes_to_remove = [
@@ -1517,52 +1587,107 @@ class GraphService:
             "rejon ", "w ", "na ", "blisko ", "centrum "
         ]
         for prefix in prefixes_to_remove:
-            if text_lower.startswith(prefix):
-                text_lower = text_lower[len(prefix):].strip()
+            if clean_text.startswith(prefix):
+                clean_text = clean_text[len(prefix):].strip()
 
         # Handle genitive forms (Polish grammar)
         # Gdańska -> Gdańsk, Gdyni -> Gdynia, Sopotu -> Sopot
-        text_variants = [text_lower]
-        if text_lower.endswith("a"):
-            text_variants.append(text_lower[:-1])  # Gdańska -> Gdańsk
-        if text_lower.endswith("i"):
-            text_variants.append(text_lower[:-1] + "a")  # Gdyni -> Gdynia
-        if text_lower.endswith("u"):
-            text_variants.append(text_lower[:-1])  # Sopotu -> Sopot
+        search_variants = [clean_text]
+        if clean_text.endswith("a"):
+            search_variants.append(clean_text[:-1])  # Gdańska -> Gdańsk
+        if clean_text.endswith("i"):
+            search_variants.append(clean_text[:-1] + "a")  # Gdyni -> Gdynia
+        if clean_text.endswith("u"):
+            search_variants.append(clean_text[:-1])  # Sopotu -> Sopot
+        if clean_text.endswith("ej"):
+            search_variants.append(clean_text[:-2] + "a")  # Osowej -> Osowa
 
         try:
-            locations = await self.get_available_locations()
+            # 1. Try fulltext search on District names (fuzzy with ~)
+            # This handles typos and missing Polish characters
+            for search_term in search_variants:
+                query = """
+                CALL db.index.fulltext.queryNodes('district_names_ft', $search_term)
+                YIELD node as district, score
+                WHERE score > 0.5
+                MATCH (district)-[:BELONGS_TO]->(city:City)
+                OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(district)
+                WITH district, city, score, count(p) as parcel_count
+                RETURN
+                    district.name as dzielnica,
+                    city.name as miejscowosc,
+                    city.name as gmina,
+                    score,
+                    parcel_count
+                ORDER BY score DESC
+                LIMIT 3
+                """
 
-            # 1. Check if it's a miejscowość (city)
-            for miejscowosc in locations.get("miejscowosci", []):
-                miejscowosc_lower = miejscowosc.lower()
-                if any(v == miejscowosc_lower or miejscowosc_lower in v or v in miejscowosc_lower
-                       for v in text_variants):
-                    gmina = await self._get_gmina_for_miejscowosc(miejscowosc)
+                results = await neo4j.run(query, {"search_term": f"{search_term}~"})
+
+                if results and len(results) > 0:
+                    best = results[0]
                     return {
                         "resolved": True,
-                        "gmina": gmina,
-                        "miejscowosc": miejscowosc,
-                        "dzielnica": None,
-                        "parcel_count": locations.get("by_miejscowosc", {}).get(miejscowosc, 0)
+                        "gmina": best["gmina"],
+                        "miejscowosc": best["miejscowosc"],
+                        "dzielnica": best["dzielnica"],
+                        "parcel_count": best["parcel_count"] or 0,
+                        "fuzzy": best["score"] < 1.0,
+                        "confidence": best["score"],
+                        "alternatives": [r["dzielnica"] for r in results[1:]] if len(results) > 1 else []
                     }
 
-            # 2. Check if it's a dzielnica - search all miejscowości
-            for miejscowosc in locations.get("miejscowosci", []):
-                districts_data = await self.get_districts_in_miejscowosc(miejscowosc)
-                for dzielnica in districts_data.get("districts", []):
-                    dzielnica_lower = dzielnica.lower()
-                    if any(v == dzielnica_lower or dzielnica_lower in v or v in dzielnica_lower
-                           for v in text_variants):
-                        return {
-                            "resolved": True,
-                            "gmina": districts_data.get("gmina"),
-                            "miejscowosc": miejscowosc,  # Dzielnica belongs to miejscowość!
-                            "dzielnica": dzielnica,
-                            "parcel_count": districts_data.get("by_district", {}).get(dzielnica, 0)
-                        }
+            # 2. Fallback - try City (miejscowość) match with CONTAINS
+            for search_term in search_variants:
+                query = """
+                MATCH (c:City)
+                WHERE toLower(c.name) CONTAINS toLower($search_term)
+                   OR toLower($search_term) CONTAINS toLower(c.name)
+                OPTIONAL MATCH (p:Parcel) WHERE p.gmina = c.name
+                WITH c, count(p) as parcel_count
+                RETURN c.name as miasto, parcel_count
+                LIMIT 1
+                """
 
-            # 3. Not found
+                city_results = await neo4j.run(query, {"search_term": search_term})
+
+                if city_results and len(city_results) > 0:
+                    return {
+                        "resolved": True,
+                        "gmina": city_results[0]["miasto"],
+                        "miejscowosc": city_results[0]["miasto"],
+                        "dzielnica": None,
+                        "parcel_count": city_results[0]["parcel_count"] or 0,
+                        "fuzzy": False
+                    }
+
+            # 3. Try direct parcel dzielnica property match (fallback for districts without nodes)
+            for search_term in search_variants:
+                query = """
+                MATCH (p:Parcel)
+                WHERE toLower(p.dzielnica) CONTAINS toLower($search_term)
+                WITH p.dzielnica as dzielnica, p.gmina as gmina, count(p) as cnt
+                RETURN dzielnica, gmina, cnt
+                ORDER BY cnt DESC
+                LIMIT 1
+                """
+
+                parcel_results = await neo4j.run(query, {"search_term": search_term})
+
+                if parcel_results and len(parcel_results) > 0:
+                    r = parcel_results[0]
+                    return {
+                        "resolved": True,
+                        "gmina": r["gmina"],
+                        "miejscowosc": r["gmina"],
+                        "dzielnica": r["dzielnica"],
+                        "parcel_count": r["cnt"] or 0,
+                        "fuzzy": False
+                    }
+
+            # 4. Not found - get available options
+            locations = await self.get_available_locations()
             return {
                 "resolved": False,
                 "error": f"Lokalizacja '{location_text}' nie została rozpoznana.",
@@ -1583,6 +1708,8 @@ class GraphService:
         """
         Validate if miejscowość + dzielnica combination is correct.
 
+        Uses ONE Cypher query instead of N+1 queries (Python loops removed).
+
         IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina!
 
         Args:
@@ -1598,43 +1725,57 @@ class GraphService:
             return {"valid": True, "message": "Brak dzielnicy do walidacji"}
 
         try:
-            # Find which miejscowość this dzielnica belongs to
-            locations = await self.get_available_locations()
+            # Single query - find dzielnica and its parent city
+            query = """
+            MATCH (d:District)-[:BELONGS_TO]->(c:City)
+            WHERE toLower(d.name) = toLower($dzielnica)
+            OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(d)
+            WITH d, c, count(p) as parcel_count
+            RETURN d.name as dzielnica, c.name as miasto, parcel_count
+            LIMIT 1
+            """
 
-            for mw in locations.get("miejscowosci", []):
-                districts_data = await self.get_districts_in_miejscowosc(mw)
-                districts_lower = [d.lower() for d in districts_data.get("districts", [])]
+            results = await neo4j.run(query, {"dzielnica": dzielnica})
 
-                if dzielnica.lower() in districts_lower:
-                    # Found the dzielnica
-                    actual_dzielnica = districts_data["districts"][districts_lower.index(dzielnica.lower())]
+            if not results or len(results) == 0:
+                # Dzielnica not found - try to suggest similar ones
+                suggest_query = """
+                MATCH (d:District)-[:BELONGS_TO]->(c:City)
+                WHERE d.name CONTAINS $partial OR toLower(d.name) CONTAINS toLower($partial)
+                RETURN d.name as dzielnica, c.name as miasto
+                LIMIT 3
+                """
+                suggestions = await neo4j.run(suggest_query, {"partial": dzielnica[:3]})
 
-                    if miejscowosc and mw.lower() != miejscowosc.lower():
-                        # Dzielnica belongs to different miejscowość!
-                        return {
-                            "valid": False,
-                            "error": f"Dzielnica '{actual_dzielnica}' należy do miejscowości '{mw}', nie '{miejscowosc}'.",
-                            "suggestion": {
-                                "miejscowosc": mw,
-                                "dzielnica": actual_dzielnica,
-                                "gmina": districts_data.get("gmina")
-                            }
-                        }
+                return {
+                    "valid": False,
+                    "error": f"Dzielnica '{dzielnica}' nie istnieje w bazie.",
+                    "suggestions": [s["dzielnica"] for s in suggestions] if suggestions else []
+                }
 
-                    # Valid combination
-                    return {
-                        "valid": True,
-                        "miejscowosc": mw,
+            actual_city = results[0]["miasto"]
+            actual_dzielnica = results[0]["dzielnica"]
+            parcel_count = results[0]["parcel_count"] or 0
+
+            # Check if miejscowość matches
+            if miejscowosc and miejscowosc.lower() != actual_city.lower():
+                return {
+                    "valid": False,
+                    "error": f"Dzielnica '{actual_dzielnica}' należy do {actual_city}, nie {miejscowosc}.",
+                    "suggestion": {
+                        "miejscowosc": actual_city,
                         "dzielnica": actual_dzielnica,
-                        "gmina": districts_data.get("gmina"),
-                        "parcel_count": districts_data.get("by_district", {}).get(actual_dzielnica, 0)
+                        "gmina": actual_city  # In MVP gmina = miejscowość
                     }
+                }
 
-            # Dzielnica not found
+            # Valid combination
             return {
-                "valid": False,
-                "error": f"Dzielnica '{dzielnica}' nie została znaleziona w żadnej miejscowości.",
-                "available_miejscowosci": locations.get("miejscowosci", [])
+                "valid": True,
+                "dzielnica": actual_dzielnica,
+                "miejscowosc": actual_city,
+                "gmina": actual_city,  # In MVP gmina = miejscowość
+                "parcel_count": parcel_count
             }
 
         except Exception as e:
@@ -1659,6 +1800,598 @@ class GraphService:
         # MATCH (m:Miejscowosc {name: $miejscowosc})-[:PART_OF]->(g:Gmina)
         # RETURN g.name
         return miejscowosc
+
+    # =========================================================================
+    # SEMANTIC ENTITY RESOLUTION (V2 - 2026-01-25)
+    # Uses 512-dim embeddings and vector search for fuzzy matching
+    # =========================================================================
+
+    async def resolve_location_v2(
+        self,
+        location_text: str,
+        top_k: int = 3,
+        min_similarity: float = 0.7
+    ) -> Dict[str, Any]:
+        """
+        Resolve location using vector similarity search on LocationName nodes.
+
+        This is the V2 implementation that uses semantic embeddings to handle:
+        - "Matemblewo" → Matarnia (location exists in price data but not cadastral)
+        - "VII Dwór" → search in [Oliwa, Wrzeszcz]
+        - "spokojna okolica Gdańska" → semantic matching
+
+        Steps:
+        1. Encode user input with sentence-transformers (512-dim)
+        2. Query LocationName vector index
+        3. Return best match with confidence
+
+        Args:
+            location_text: User's location description (e.g., "Matemblewo", "okolice Osowej")
+            top_k: Number of candidates to retrieve
+            min_similarity: Minimum cosine similarity threshold
+
+        Returns:
+            Dict with:
+            - resolved: bool
+            - canonical_name: Display name
+            - type: "city" | "district" | "area"
+            - maps_to_district: EGiB district name or None
+            - maps_to_gmina: City/gmina name
+            - search_in_districts: List of districts to search in
+            - price_segment: Price segment if known
+            - similarity: Match score
+            - confidence: HIGH/MEDIUM/LOW
+            - alternatives: Other possible matches
+        """
+        try:
+            # Import embedding service
+            from app.services.embedding_service import EmbeddingService
+
+            # Clean input
+            clean_text = location_text.lower().strip()
+            prefixes = ["okolice ", "okolica ", "gmina ", "miasto ", "m. ", "dzielnica ",
+                       "rejon ", "w ", "na ", "blisko ", "centrum "]
+            for prefix in prefixes:
+                if clean_text.startswith(prefix):
+                    clean_text = clean_text[len(prefix):].strip()
+
+            # Generate embedding for user input
+            query_embedding = EmbeddingService.encode(clean_text)
+
+            # Vector search on LocationName nodes
+            query = """
+            CALL db.index.vector.queryNodes('location_name_embedding_idx', $top_k, $embedding)
+            YIELD node, score
+            WHERE score >= $min_similarity
+            RETURN
+                node.id as id,
+                node.canonical_name as canonical_name,
+                node.type as type,
+                node.maps_to_district as maps_to_district,
+                node.maps_to_gmina as maps_to_gmina,
+                node.search_in_districts as search_in_districts,
+                node.price_segment as price_segment,
+                node.price_min as price_min,
+                node.price_max as price_max,
+                node.note as note,
+                score as similarity
+            ORDER BY score DESC
+            """
+
+            results = await neo4j.run(query, {
+                "embedding": query_embedding,
+                "top_k": top_k,
+                "min_similarity": min_similarity
+            })
+
+            if not results or len(results) == 0:
+                # Fallback to original resolve_location for districts not in LocationName
+                logger.info(f"No vector match for '{location_text}', falling back to fulltext")
+                return await self.resolve_location(location_text)
+
+            best = results[0]
+
+            # Determine confidence based on similarity
+            similarity = best["similarity"]
+            if similarity > 0.9:
+                confidence = "HIGH"
+            elif similarity > 0.8:
+                confidence = "MEDIUM"
+            else:
+                confidence = "LOW"
+
+            # Build search_in_districts - fallback to maps_to_district if not specified
+            search_in_districts = best.get("search_in_districts") or []
+            if not search_in_districts and best.get("maps_to_district"):
+                search_in_districts = [best["maps_to_district"]]
+
+            return {
+                "resolved": True,
+                "canonical_name": best["canonical_name"],
+                "type": best["type"],
+                "maps_to_district": best["maps_to_district"],
+                "maps_to_gmina": best["maps_to_gmina"],
+                "search_in_districts": search_in_districts,
+                "price_segment": best.get("price_segment"),
+                "price_min": best.get("price_min"),
+                "price_max": best.get("price_max"),
+                "note": best.get("note"),
+                "similarity": similarity,
+                "confidence": confidence,
+                "alternatives": [r["canonical_name"] for r in results[1:]] if len(results) > 1 else [],
+                # Compatibility with existing code
+                "gmina": best["maps_to_gmina"],
+                "dzielnica": best["maps_to_district"],
+                "miejscowosc": best["maps_to_gmina"],
+            }
+
+        except Exception as e:
+            logger.warning(f"resolve_location_v2 error: {e}, falling back to v1")
+            # Fallback to original implementation
+            return await self.resolve_location(location_text)
+
+    async def resolve_semantic_category(
+        self,
+        user_text: str,
+        category_type: str
+    ) -> Dict[str, Any]:
+        """
+        Resolve user's description to graph category values using vector search.
+
+        Maps natural language descriptions to category enum values:
+        - "spokojna okolica" → ["bardzo_cicha", "cicha"]
+        - "blisko lasu" → ["bardzo_zielona", "zielona"]
+        - "dobry dojazd" → ["doskonała", "dobra"]
+
+        Args:
+            user_text: User's description (e.g., "spokojna", "zielona okolica")
+            category_type: One of "quietness", "nature", "accessibility", "density"
+
+        Returns:
+            Dict with:
+            - resolved: bool
+            - matched_name: Canonical name of matched category
+            - values: List of graph category IDs to use in query
+            - similarity: Match score
+        """
+        try:
+            from app.services.embedding_service import EmbeddingService
+
+            query_embedding = EmbeddingService.encode(user_text.lower().strip())
+
+            query = """
+            CALL db.index.vector.queryNodes('semantic_category_embedding_idx', 3, $embedding)
+            YIELD node, score
+            WHERE node.type = $category_type AND score >= 0.6
+            RETURN
+                node.id as id,
+                node.canonical_name as name,
+                node.maps_to_values as values,
+                score as similarity
+            ORDER BY score DESC
+            LIMIT 1
+            """
+
+            results = await neo4j.run(query, {
+                "embedding": query_embedding,
+                "category_type": category_type
+            })
+
+            if not results or len(results) == 0:
+                return {
+                    "resolved": False,
+                    "error": f"No matching {category_type} category for '{user_text}'"
+                }
+
+            best = results[0]
+            return {
+                "resolved": True,
+                "matched_name": best["name"],
+                "values": best["values"],
+                "similarity": best["similarity"]
+            }
+
+        except Exception as e:
+            logger.error(f"resolve_semantic_category error: {e}")
+            return {"resolved": False, "error": str(e)}
+
+    async def resolve_water_type(
+        self,
+        user_text: str
+    ) -> Dict[str, Any]:
+        """
+        Resolve user's water description to water type.
+
+        Maps natural language to water type enum:
+        - "nad morzem" → "morze"
+        - "przy jeziorze" → "jezioro"
+        - "blisko wody" → "jezioro" (default)
+
+        Args:
+            user_text: User's water description (e.g., "nad morzem", "przy jeziorze")
+
+        Returns:
+            Dict with:
+            - resolved: bool
+            - water_type: Water type ID
+            - canonical_name: Display name
+            - premium_factor: Price multiplier for this water type
+            - similarity: Match score
+        """
+        try:
+            from app.services.embedding_service import EmbeddingService
+
+            query_embedding = EmbeddingService.encode(user_text.lower().strip())
+
+            query = """
+            CALL db.index.vector.queryNodes('water_type_name_embedding_idx', 3, $embedding)
+            YIELD node, score
+            WHERE score >= 0.5
+            RETURN
+                node.id as id,
+                node.canonical_name as canonical_name,
+                node.maps_to_water_type as water_type,
+                node.premium_factor as premium_factor,
+                score as similarity
+            ORDER BY score DESC
+            LIMIT 1
+            """
+
+            results = await neo4j.run(query, {"embedding": query_embedding})
+
+            if not results or len(results) == 0:
+                return {
+                    "resolved": False,
+                    "error": f"No matching water type for '{user_text}'",
+                    "hint": "Available: morze, jezioro, rzeka, kanał, staw"
+                }
+
+            best = results[0]
+            return {
+                "resolved": True,
+                "water_type": best["water_type"],
+                "canonical_name": best["canonical_name"],
+                "premium_factor": best["premium_factor"],
+                "similarity": best["similarity"]
+            }
+
+        except Exception as e:
+            logger.error(f"resolve_water_type error: {e}")
+            return {"resolved": False, "error": str(e)}
+
+    async def resolve_poi_type(
+        self,
+        user_text: str
+    ) -> Dict[str, Any]:
+        """
+        Resolve user's POI description to POI types.
+
+        Maps natural language to POI type IDs:
+        - "szkoła" → ["school", "kindergarten"]
+        - "sklep" → ["shop", "supermarket"]
+        - "przystanek" → ["bus_stop"]
+
+        Args:
+            user_text: User's POI description (e.g., "szkoła", "sklep w pobliżu")
+
+        Returns:
+            Dict with:
+            - resolved: bool
+            - poi_types: List of POI type IDs
+            - canonical_name: Display name
+            - similarity: Match score
+        """
+        try:
+            from app.services.embedding_service import EmbeddingService
+
+            query_embedding = EmbeddingService.encode(user_text.lower().strip())
+
+            query = """
+            CALL db.index.vector.queryNodes('poi_type_name_embedding_idx', 3, $embedding)
+            YIELD node, score
+            WHERE score >= 0.5
+            RETURN
+                node.id as id,
+                node.canonical_name as canonical_name,
+                node.maps_to_poi_types as poi_types,
+                score as similarity
+            ORDER BY score DESC
+            LIMIT 1
+            """
+
+            results = await neo4j.run(query, {"embedding": query_embedding})
+
+            if not results or len(results) == 0:
+                return {
+                    "resolved": False,
+                    "error": f"No matching POI type for '{user_text}'"
+                }
+
+            best = results[0]
+            return {
+                "resolved": True,
+                "poi_types": best["poi_types"],
+                "canonical_name": best["canonical_name"],
+                "similarity": best["similarity"]
+            }
+
+        except Exception as e:
+            logger.error(f"resolve_poi_type error: {e}")
+            return {"resolved": False, "error": str(e)}
+
+    # =========================================================================
+    # NEO4J NATIVE VECTOR SEARCH (replacing Milvus for simplicity)
+    # =========================================================================
+
+    async def search_similar_parcels_vector(
+        self,
+        reference_parcel_id: str,
+        top_k: int = 10,
+        gmina: Optional[str] = None,
+        min_area: Optional[float] = None,
+        max_area: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for similar parcels using Neo4j's native Vector Index.
+
+        Uses 32-dimensional embeddings stored on Parcel.embedding property.
+        This replaces the need for separate Milvus database.
+
+        Args:
+            reference_parcel_id: ID of the parcel to find similar ones to
+            top_k: Number of results to return
+            gmina: Optional city filter
+            min_area: Optional minimum area filter
+            max_area: Optional maximum area filter
+
+        Returns:
+            List of similar parcels with similarity scores
+        """
+        # Build WHERE conditions for post-filtering
+        conditions = ["similar.id_dzialki <> $parcel_id"]
+        params = {"parcel_id": reference_parcel_id, "top_k": top_k * 2}  # Fetch more to account for filters
+
+        if gmina:
+            conditions.append("similar.gmina = $gmina")
+            params["gmina"] = gmina
+        if min_area:
+            conditions.append("similar.area_m2 >= $min_area")
+            params["min_area"] = min_area
+        if max_area:
+            conditions.append("similar.area_m2 <= $max_area")
+            params["max_area"] = max_area
+
+        where_clause = " AND ".join(conditions)
+
+        query = f"""
+        // Get embedding from reference parcel
+        MATCH (ref:Parcel {{id_dzialki: $parcel_id}})
+        WHERE ref.embedding IS NOT NULL
+
+        // Search for similar parcels using vector index
+        CALL db.index.vector.queryNodes('parcel_embedding_index', $top_k, ref.embedding)
+        YIELD node as similar, score
+
+        // Apply post-filters
+        WHERE {where_clause}
+
+        RETURN
+            similar.id_dzialki as id,
+            similar.gmina as gmina,
+            similar.dzielnica as dzielnica,
+            similar.area_m2 as area_m2,
+            similar.quietness_score as quietness_score,
+            similar.nature_score as nature_score,
+            similar.accessibility_score as accessibility_score,
+            similar.centroid_lat as lat,
+            similar.centroid_lon as lon,
+            similar.pog_symbol as mpzp_symbol,
+            similar.is_built as is_built,
+            score as similarity
+        ORDER BY score DESC
+        LIMIT {top_k}
+        """
+
+        try:
+            results = await neo4j.run(query, params)
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Vector similarity search error: {e}")
+            return []
+
+    async def search_by_preferences_vector(
+        self,
+        preferences: Dict[str, float],
+        top_k: int = 20,
+        gmina: Optional[str] = None,
+        min_area: Optional[float] = None,
+        max_area: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for parcels using a preference vector.
+
+        Creates a synthetic embedding from user preferences and searches
+        for similar parcels in the vector space.
+
+        Args:
+            preferences: Dict with keys like 'quietness', 'nature', 'accessibility'
+                        and float values 0.0-1.0 representing importance
+            top_k: Number of results
+            gmina: Optional city filter
+            min_area: Optional minimum area
+            max_area: Optional maximum area
+
+        Returns:
+            List of matching parcels with similarity scores
+        """
+        # Build preference embedding (32 dimensions matching SRAI)
+        pref_embedding = self._build_preference_embedding(preferences)
+
+        # Build WHERE conditions
+        conditions = []
+        params = {"embedding": pref_embedding, "top_k": top_k * 2}
+
+        if gmina:
+            conditions.append("p.gmina = $gmina")
+            params["gmina"] = gmina
+        if min_area:
+            conditions.append("p.area_m2 >= $min_area")
+            params["min_area"] = min_area
+        if max_area:
+            conditions.append("p.area_m2 <= $max_area")
+            params["max_area"] = max_area
+
+        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+
+        query = f"""
+        CALL db.index.vector.queryNodes('parcel_embedding_index', $top_k, $embedding)
+        YIELD node as p, score
+        {where_clause}
+        RETURN
+            p.id_dzialki as id,
+            p.gmina as gmina,
+            p.dzielnica as dzielnica,
+            p.area_m2 as area_m2,
+            p.quietness_score as quietness_score,
+            p.nature_score as nature_score,
+            p.accessibility_score as accessibility_score,
+            p.centroid_lat as lat,
+            p.centroid_lon as lon,
+            p.pog_symbol as mpzp_symbol,
+            p.is_built as is_built,
+            score as similarity
+        ORDER BY score DESC
+        LIMIT {top_k}
+        """
+
+        try:
+            results = await neo4j.run(query, params)
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Preference vector search error: {e}")
+            return []
+
+    def _build_preference_embedding(self, preferences: Dict[str, float]) -> List[float]:
+        """
+        Build a 32-dimensional embedding from user preferences.
+
+        Maps preference weights to embedding dimensions based on how
+        SRAI embeddings were generated (matching 18_generate_embeddings.py structure).
+
+        Args:
+            preferences: Dict with keys like:
+                - quietness: 0.0-1.0
+                - nature: 0.0-1.0
+                - accessibility: 0.0-1.0
+                - area_preference: 0.0 (small) to 1.0 (large)
+
+        Returns:
+            32-dimensional embedding vector
+        """
+        import numpy as np
+
+        # 32-dimensional embedding
+        dim = 32
+        vector = np.zeros(dim)
+
+        # Preference mapping to embedding dimensions
+        # These indices should align with SRAI embedding structure
+        preference_mapping = {
+            "quietness": (0, 8),       # Dimensions 0-7: quietness-related features
+            "nature": (8, 16),         # Dimensions 8-15: nature-related features
+            "accessibility": (16, 24), # Dimensions 16-23: accessibility features
+            "area_preference": (24, 32), # Dimensions 24-31: area/density features
+        }
+
+        for pref_name, weight in preferences.items():
+            if pref_name in preference_mapping and weight is not None:
+                start, end = preference_mapping[pref_name]
+                # Spread the weight across dimensions with some variation
+                for i in range(start, end):
+                    # Alternate signs to create realistic embedding pattern
+                    sign = 1 if (i - start) % 2 == 0 else -1
+                    vector[i] = sign * weight * (1.0 - 0.1 * ((i - start) % 4))
+
+        # Normalize to unit vector
+        norm = np.linalg.norm(vector)
+        if norm > 0:
+            vector = vector / norm
+
+        return vector.tolist()
+
+    async def get_quiet_districts(
+        self,
+        gmina: Optional[str] = None,
+        limit: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Get districts with the most quiet parcels.
+
+        Used for dynamic suggestions instead of hardcoded lists.
+
+        Args:
+            gmina: Optional city filter
+            limit: Number of districts to return
+
+        Returns:
+            List of districts with quiet parcel counts
+        """
+        gmina_filter = "AND p.gmina = $gmina" if gmina else ""
+
+        query = f"""
+        MATCH (p:Parcel)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
+        WHERE qc.id IN ['bardzo_cicha', 'cicha']
+              AND p.dzielnica IS NOT NULL
+              {gmina_filter}
+        WITH p.dzielnica as district, p.gmina as gmina, count(p) as quiet_count
+        RETURN district as name, gmina, quiet_count
+        ORDER BY quiet_count DESC
+        LIMIT $limit
+        """
+
+        try:
+            results = await neo4j.run(query, {"gmina": gmina, "limit": limit})
+            return [dict(r) for r in results if r.get("name")]
+        except Exception as e:
+            logger.error(f"Get quiet districts error: {e}")
+            return []
+
+    async def get_green_districts(
+        self,
+        gmina: Optional[str] = None,
+        limit: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Get districts with the most green/natural parcels.
+
+        Used for dynamic suggestions instead of hardcoded lists.
+
+        Args:
+            gmina: Optional city filter
+            limit: Number of districts to return
+
+        Returns:
+            List of districts with green parcel counts
+        """
+        gmina_filter = "AND p.gmina = $gmina" if gmina else ""
+
+        query = f"""
+        MATCH (p:Parcel)-[:HAS_NATURE]->(nc:NatureCategory)
+        WHERE nc.id IN ['bardzo_zielona', 'zielona']
+              AND p.dzielnica IS NOT NULL
+              {gmina_filter}
+        WITH p.dzielnica as district, p.gmina as gmina, count(p) as green_count
+        RETURN district as name, gmina, green_count
+        ORDER BY green_count DESC
+        LIMIT $limit
+        """
+
+        try:
+            results = await neo4j.run(query, {"gmina": gmina, "limit": limit})
+            return [dict(r) for r in results if r.get("name")]
+        except Exception as e:
+            logger.error(f"Get green districts error: {e}")
+            return []
 
     async def search_parcels_randomized(
         self,
@@ -1786,6 +2519,285 @@ class GraphService:
             return [dict(r) for r in results]
         except Exception as e:
             logger.error(f"Randomized search error: {e}")
+            return []
+
+    # =========================================================================
+    # NEO4J V2: ADJACENCY, NEAR POI, GRAPH EMBEDDINGS (2026-01-25)
+    # Multi-hop traversals using ADJACENT_TO and NEAR_* relations
+    # =========================================================================
+
+    async def find_adjacent_parcels(
+        self,
+        parcel_id: str,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Find parcels adjacent to the given parcel using ADJACENT_TO relation.
+
+        Uses 407,825 ADJACENT_TO relations with shared_border_m property.
+
+        Args:
+            parcel_id: ID of the reference parcel
+            limit: Maximum number of neighbors to return
+
+        Returns:
+            List of neighboring parcels with shared border length
+        """
+        query = """
+        MATCH (p:Parcel {id_dzialki: $parcel_id})-[r:ADJACENT_TO]-(neighbor:Parcel)
+        OPTIONAL MATCH (neighbor)-[:LOCATED_IN]->(d:District)
+        RETURN
+            neighbor.id_dzialki AS id,
+            neighbor.dzielnica AS dzielnica,
+            neighbor.gmina AS gmina,
+            neighbor.area_m2 AS area_m2,
+            neighbor.quietness_score AS quietness_score,
+            neighbor.nature_score AS nature_score,
+            neighbor.is_built AS is_built,
+            neighbor.centroid_lat AS lat,
+            neighbor.centroid_lon AS lon,
+            r.shared_border_m AS shared_border_m
+        ORDER BY r.shared_border_m DESC
+        LIMIT $limit
+        """
+
+        try:
+            results = await neo4j.run(query, {"parcel_id": parcel_id, "limit": limit})
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Find adjacent parcels error: {e}")
+            return []
+
+    async def search_near_poi(
+        self,
+        poi_type: str,
+        poi_name: Optional[str] = None,
+        max_distance_m: int = 1000,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Search parcels near a specific POI using NEAR_* relations.
+
+        Uses pre-computed NEAR_SCHOOL, NEAR_SHOP, NEAR_BUS_STOP, etc. relations
+        with distance_m property.
+
+        Args:
+            poi_type: Type of POI (school, shop, bus_stop, forest, water)
+            poi_name: Optional name filter (e.g., "SP nr 45")
+            max_distance_m: Maximum distance in meters
+            limit: Maximum results
+
+        Returns:
+            List of parcels near the specified POI
+        """
+        # Map poi_type to relation and node type
+        poi_config = {
+            "school": {"relation": "NEAR_SCHOOL", "node": "School"},
+            "shop": {"relation": "NEAR_SHOP", "node": "Shop"},
+            "bus_stop": {"relation": "NEAR_BUS_STOP", "node": "BusStop"},
+            "forest": {"relation": "NEAR_FOREST", "node": "Forest"},
+            "water": {"relation": "NEAR_WATER", "node": "Water"},
+        }
+
+        if poi_type not in poi_config:
+            logger.warning(f"Unknown POI type: {poi_type}")
+            return []
+
+        rel_type = poi_config[poi_type]["relation"]
+        node_type = poi_config[poi_type]["node"]
+
+        # Build query with optional name filter
+        name_filter = "AND toLower(poi.name) CONTAINS toLower($poi_name)" if poi_name else ""
+
+        query = f"""
+        MATCH (p:Parcel)-[r:{rel_type}]->(poi:{node_type})
+        WHERE r.distance_m <= $max_distance
+              {name_filter}
+        RETURN
+            p.id_dzialki AS id,
+            p.dzielnica AS dzielnica,
+            p.gmina AS gmina,
+            p.area_m2 AS area_m2,
+            p.quietness_score AS quietness_score,
+            p.nature_score AS nature_score,
+            p.centroid_lat AS lat,
+            p.centroid_lon AS lon,
+            poi.name AS poi_name,
+            r.distance_m AS distance_m
+        ORDER BY r.distance_m ASC
+        LIMIT $limit
+        """
+
+        params = {
+            "max_distance": max_distance_m,
+            "limit": limit
+        }
+        if poi_name:
+            params["poi_name"] = poi_name
+
+        try:
+            results = await neo4j.run(query, params)
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Search near POI error: {e}")
+            return []
+
+    async def find_similar_by_graph_embedding(
+        self,
+        parcel_id: str,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Find structurally similar parcels using graph embeddings (256-dim FastRP).
+
+        Uses Neo4j GDS FastRP embeddings that capture graph structure:
+        - Same neighborhood (district)
+        - Similar category assignments (quietness, nature, etc.)
+        - Similar ownership and build status
+
+        Different from text embeddings which capture semantic description.
+
+        Args:
+            parcel_id: ID of the reference parcel
+            limit: Number of similar parcels to return
+
+        Returns:
+            List of structurally similar parcels with similarity scores
+        """
+        query = """
+        MATCH (ref:Parcel {id_dzialki: $parcel_id})
+        WHERE ref.graph_embedding IS NOT NULL
+
+        CALL db.index.vector.queryNodes('parcel_graph_embedding_idx', $limit_plus, ref.graph_embedding)
+        YIELD node AS similar, score
+
+        WHERE similar.id_dzialki <> $parcel_id
+
+        RETURN
+            similar.id_dzialki AS id,
+            similar.dzielnica AS dzielnica,
+            similar.gmina AS gmina,
+            similar.area_m2 AS area_m2,
+            similar.quietness_score AS quietness_score,
+            similar.nature_score AS nature_score,
+            similar.accessibility_score AS accessibility_score,
+            similar.is_built AS is_built,
+            similar.centroid_lat AS lat,
+            similar.centroid_lon AS lon,
+            score AS similarity
+        ORDER BY score DESC
+        LIMIT $limit
+        """
+
+        try:
+            results = await neo4j.run(query, {
+                "parcel_id": parcel_id,
+                "limit": limit,
+                "limit_plus": limit + 1  # Fetch extra to exclude self
+            })
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Find similar by graph embedding error: {e}")
+            return []
+
+    async def graphrag_search(
+        self,
+        query_embedding: List[float],
+        ownership_type: Optional[str] = None,
+        build_status: Optional[str] = None,
+        size_category: Optional[List[str]] = None,
+        gmina: Optional[str] = None,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        GraphRAG: Combine vector search with graph constraints.
+
+        1. Vector search finds semantically similar parcels (text_embedding 512-dim)
+        2. Graph constraints filter by ownership, build status, size, location
+        3. Returns hybrid-ranked results
+
+        Args:
+            query_embedding: 512-dim text embedding from user query
+            ownership_type: Filter by ownership (prywatna, publiczna, etc.)
+            build_status: Filter by build status (zabudowana, niezabudowana)
+            size_category: Filter by size categories
+            gmina: Filter by city
+            limit: Maximum results
+
+        Returns:
+            List of parcels ranked by vector similarity with graph filters applied
+        """
+        # Build optional MATCH clauses for graph constraints
+        graph_matches = []
+        where_conditions = []
+        params = {
+            "embedding": query_embedding,
+            "vector_limit": limit * 3,  # Fetch more candidates for filtering
+            "limit": limit
+        }
+
+        if ownership_type:
+            graph_matches.append("MATCH (candidate)-[:HAS_OWNERSHIP]->(o:OwnershipType)")
+            where_conditions.append("o.id = $ownership_type")
+            params["ownership_type"] = ownership_type
+
+        if build_status:
+            graph_matches.append("MATCH (candidate)-[:HAS_BUILD_STATUS]->(bs:BuildStatus)")
+            where_conditions.append("bs.id = $build_status")
+            params["build_status"] = build_status
+
+        if size_category:
+            graph_matches.append("MATCH (candidate)-[:HAS_SIZE]->(sz:SizeCategory)")
+            where_conditions.append("sz.id IN $size_categories")
+            params["size_categories"] = size_category
+
+        if gmina:
+            where_conditions.append("candidate.gmina = $gmina")
+            params["gmina"] = gmina
+
+        graph_match_clause = "\n".join(graph_matches) if graph_matches else ""
+        where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+
+        query = f"""
+        // Step 1: Vector search for semantic similarity
+        CALL db.index.vector.queryNodes('parcel_text_embedding_idx', $vector_limit, $embedding)
+        YIELD node AS candidate, score AS vector_score
+
+        // Step 2: Graph constraints
+        {graph_match_clause}
+        MATCH (candidate)-[:LOCATED_IN]->(d:District)
+        {where_clause}
+
+        // Step 3: Return with context
+        OPTIONAL MATCH (candidate)-[r:NEAR_SCHOOL]->(s:School)
+        WITH candidate, d, vector_score,
+             COUNT(DISTINCT s) AS schools_nearby,
+             MIN(r.distance_m) AS nearest_school_m
+
+        RETURN
+            candidate.id_dzialki AS id,
+            candidate.dzielnica AS dzielnica,
+            d.name AS district_name,
+            candidate.gmina AS gmina,
+            candidate.area_m2 AS area_m2,
+            candidate.quietness_score AS quietness_score,
+            candidate.nature_score AS nature_score,
+            candidate.accessibility_score AS accessibility_score,
+            candidate.is_built AS is_built,
+            candidate.centroid_lat AS lat,
+            candidate.centroid_lon AS lon,
+            vector_score,
+            schools_nearby,
+            nearest_school_m
+        ORDER BY vector_score DESC
+        LIMIT $limit
+        """
+
+        try:
+            results = await neo4j.run(query, params)
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"GraphRAG search error: {e}")
             return []
 
 

@@ -70,6 +70,18 @@ class SearchPreferences:
     # === INDUSTRIAL DISTANCE ===
     min_dist_to_industrial_m: Optional[int] = None  # want to be FAR from industry
 
+    # === NEO4J V2: OWNERSHIP (2026-01-25) ===
+    ownership_type: Optional[str] = None  # "prywatna", "publiczna", "spoldzielcza", "koscielna", "inna"
+
+    # === NEO4J V2: BUILD STATUS (2026-01-25) ===
+    build_status: Optional[str] = None  # "zabudowana", "niezabudowana"
+
+    # === NEO4J V2: SIZE CATEGORY (2026-01-25) ===
+    size_category: Optional[List[str]] = None  # ["mala", "pod_dom", "duza", "bardzo_duza"]
+
+    # === NEO4J V2: POG RESIDENTIAL (2026-01-25) ===
+    pog_residential: Optional[bool] = None  # Only residential POG zones
+
     # === SORTING ===
     sort_by: str = "quietness_score"  # or "nature_score", "accessibility_score", "area_m2"
     sort_desc: bool = True
@@ -108,6 +120,11 @@ class SearchPreferences:
             mpzp_buildable=self.mpzp_budowlane,
             mpzp_symbols=self.mpzp_symbols,
             min_dist_to_industrial_m=self.min_dist_to_industrial_m,
+            # NEO4J V2 filters (2026-01-25)
+            ownership_type=self.ownership_type,
+            build_status=self.build_status,
+            size_category=self.size_category,
+            pog_residential=self.pog_residential,
             sort_by=self.sort_by,
             sort_desc=self.sort_desc,
             limit=limit,

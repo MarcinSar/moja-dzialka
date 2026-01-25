@@ -137,6 +137,33 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                     "description": "Czy działka musi mieć dostęp do drogi publicznej"
                 },
 
+                # === WŁASNOŚĆ (NOWE - Neo4j v2) ===
+                "ownership_type": {
+                    "type": "string",
+                    "enum": ["prywatna", "publiczna", "spoldzielcza", "koscielna", "inna"],
+                    "description": "Typ własności. 'prywatna' = działki do kupienia (78k dostępnych)"
+                },
+
+                # === STATUS ZABUDOWY (NOWE - Neo4j v2) ===
+                "build_status": {
+                    "type": "string",
+                    "enum": ["zabudowana", "niezabudowana"],
+                    "description": "Status zabudowy. 'niezabudowana' = idealna pod budowę (93k dostępnych)"
+                },
+
+                # === KATEGORIA ROZMIARU (NOWE - Neo4j v2) ===
+                "size_category": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["mala", "pod_dom", "duza", "bardzo_duza"]},
+                    "description": "Kategorie rozmiaru: mala (<500m²), pod_dom (500-2000m² - idealne!), duza (2000-5000m²), bardzo_duza (>5000m²)"
+                },
+
+                # === POG (NOWE - Neo4j v2) ===
+                "pog_residential": {
+                    "type": "boolean",
+                    "description": "Tylko działki w strefach mieszkaniowych POG (MN, MW)"
+                },
+
                 # === MPZP ===
                 "requires_mpzp": {
                     "type": "boolean",
@@ -204,7 +231,8 @@ Użyj gdy użytkownik chce zmienić tylko jedną rzecz w propozycji.
                     "enum": [
                         "gmina", "miejscowosc", "powiat",
                         "lat", "lon", "radius_m",
-                        "min_area_m2", "max_area_m2", "area_category",
+                        "min_area_m2", "max_area_m2", "area_category", "size_category",
+                        "ownership_type", "build_status", "pog_residential",
                         "quietness_categories", "building_density", "min_dist_to_industrial_m",
                         "nature_categories", "max_dist_to_forest_m", "max_dist_to_water_m", "min_forest_pct_500m",
                         "accessibility_categories", "max_dist_to_school_m", "max_dist_to_shop_m", "max_dist_to_bus_stop_m", "max_dist_to_hospital_m", "has_road_access",
@@ -986,6 +1014,177 @@ validate_location_combination(miejscowosc="Gdańsk", dzielnica="Orłowo")
                 }
             },
             "required": ["dzielnica"]
+        }
+    },
+
+    # =========================================================================
+    # SEMANTIC ENTITY RESOLUTION (2026-01-25)
+    # Uses 384-dim embeddings for fuzzy matching
+    # =========================================================================
+    {
+        "name": "resolve_entity",
+        "description": """
+Rozwiąż tekst użytkownika na encję w grafie używając semantycznego dopasowania (embeddingi).
+
+TYPY ENCJI:
+- location: "Matemblewo" → dzielnica Matarnia w Gdańsku (lokalizacje nieistniejące w katastrze)
+- quietness: "spokojna okolica" → kategorie ciszy ["bardzo_cicha", "cicha"]
+- nature: "blisko lasu" → kategorie natury ["bardzo_zielona", "zielona"]
+- accessibility: "dobry dojazd" → kategorie dostępności
+- density: "rzadka zabudowa" → kategorie gęstości
+- water: "nad morzem" → typ wody "morze"
+- poi: "szkoła" → typy POI ["school", "kindergarten"]
+
+KIEDY UŻYWAĆ:
+- Gdy użytkownik używa niestandardowych nazw lub opisów
+- Gdy "Matemblewo" lub "VII Dwór" nie są rozpoznane przez resolve_location
+- Gdy chcesz zrozumieć intencję użytkownika (np. "spokojna" = kategoria ciszy)
+
+PRZYKŁADY:
+1. resolve_entity(entity_type="location", user_text="Matemblewo")
+   → {maps_to_district: "Matarnia", maps_to_gmina: "Gdańsk", confidence: "HIGH"}
+
+2. resolve_entity(entity_type="quietness", user_text="spokojna okolica")
+   → {values: ["bardzo_cicha", "cicha"]}
+
+3. resolve_entity(entity_type="water", user_text="nad morzem")
+   → {water_type: "morze", premium_factor: 2.0}
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "entity_type": {
+                    "type": "string",
+                    "enum": ["location", "quietness", "nature", "accessibility", "density", "water", "poi"],
+                    "description": "Typ encji do rozwiązania"
+                },
+                "user_text": {
+                    "type": "string",
+                    "description": "Tekst użytkownika do rozwiązania (np. 'Matemblewo', 'spokojna okolica', 'nad morzem')"
+                }
+            },
+            "required": ["entity_type", "user_text"]
+        }
+    },
+
+    # =========================================================================
+    # NEO4J V2 GRAPH TOOLS (2026-01-25)
+    # Multi-hop traversals, adjacency, graph embeddings
+    # =========================================================================
+    {
+        "name": "find_adjacent_parcels",
+        "description": """
+Znajdź działki sąsiadujące z wybraną działką.
+Używa relacji ADJACENT_TO z informacją o długości wspólnej granicy.
+
+KIEDY UŻYWAĆ:
+- User pyta "jakie działki sąsiadują z X?"
+- User chce kupić działkę obok już posiadanej
+- User pyta o potencjał scalenia działek
+- User interesuje się sąsiedztwem konkretnej działki
+
+ZWRACA:
+- Lista sąsiadów z długością wspólnej granicy (shared_border_m)
+- Podstawowe info o każdym sąsiedzie (area, quietness, dzielnica)
+
+PRZYKŁAD:
+find_adjacent_parcels(parcel_id="220601_1.0001.123/4", limit=10)
+→ [{id: "220601_1.0001.123/5", shared_border_m: 45.2, area_m2: 1100}, ...]
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_id": {
+                    "type": "string",
+                    "description": "ID działki referencyjnej"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max liczba sąsiadów (domyślnie 10)"
+                }
+            },
+            "required": ["parcel_id"]
+        }
+    },
+    {
+        "name": "search_near_specific_poi",
+        "description": """
+Znajdź działki blisko KONKRETNEGO POI (szkoły, sklepu, przystanku).
+Używa relacji NEAR_* z dokładną odległością w metrach.
+
+KIEDY UŻYWAĆ:
+- User pyta "działki blisko szkoły SP nr 45"
+- User chce być blisko konkretnego obiektu (np. konkretny przystanek)
+- User wymienia konkretną nazwę POI
+
+TYPY POI:
+- school: szkoły (226k relacji, threshold 2000m)
+- shop: sklepy (747k relacji, threshold 1500m)
+- bus_stop: przystanki (248k relacji, threshold 1000m)
+- forest: lasy (168k relacji, threshold 500m)
+- water: wody (106k relacji, threshold 500m)
+
+PRZYKŁAD:
+search_near_specific_poi(poi_type="school", poi_name="SP nr 45", max_distance_m=500)
+→ [{id: "...", dzielnica: "Osowa", poi_name: "SP nr 45", distance_m: 320}, ...]
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "poi_type": {
+                    "type": "string",
+                    "enum": ["school", "shop", "bus_stop", "forest", "water"],
+                    "description": "Typ POI"
+                },
+                "poi_name": {
+                    "type": "string",
+                    "description": "Nazwa POI (np. 'SP nr 45', 'Biedronka', 'Osowa PKM')"
+                },
+                "max_distance_m": {
+                    "type": "integer",
+                    "description": "Max odległość w metrach (domyślnie 1000)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max wyników (domyślnie 20)"
+                }
+            },
+            "required": ["poi_type"]
+        }
+    },
+    {
+        "name": "find_similar_by_graph",
+        "description": """
+Znajdź działki STRUKTURALNIE podobne używając graph embeddings (256-dim FastRP).
+Różni się od similarity semantycznego - tu liczy się struktura grafu (relacje, sąsiedztwo).
+
+KIEDY UŻYWAĆ:
+- User wskazał działkę i chce "podobne pod względem lokalizacji/okolicy"
+- User szuka działek o podobnym profilu sąsiedztwa
+- User chce znaleźć działki w podobnej "konfiguracji" (np. podobna odległość do POI)
+
+RÓŻNICA OD find_similar_parcels:
+- find_similar_parcels: similarity po tekście (opis, cechy)
+- find_similar_by_graph: similarity po strukturze grafu (relacje, kontekst)
+
+PRZYKŁAD:
+User wskazał działkę na Wyspie Sobieszewskiej.
+find_similar_by_graph(parcel_id="220611_2.0001.1234")
+→ Znajdzie inne działki na Wyspie Sobieszewskiej o podobnej strukturze relacji
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_id": {
+                    "type": "string",
+                    "description": "ID działki referencyjnej"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Liczba podobnych (domyślnie 10)"
+                }
+            },
+            "required": ["parcel_id"]
         }
     },
 ]

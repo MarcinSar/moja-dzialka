@@ -93,24 +93,46 @@ class VectorService:
             List of similar parcels with scores
         """
         # Build filter expression
+        # NOTE: Milvus filter syntax uses string interpolation - sanitize inputs!
         filter_parts = []
 
         if min_area is not None:
-            filter_parts.append(f"area_m2 >= {min_area}")
+            # Validate numeric input
+            if not isinstance(min_area, (int, float)):
+                raise ValueError("min_area must be numeric")
+            filter_parts.append(f"area_m2 >= {float(min_area)}")
 
         if max_area is not None:
-            filter_parts.append(f"area_m2 <= {max_area}")
+            # Validate numeric input
+            if not isinstance(max_area, (int, float)):
+                raise ValueError("max_area must be numeric")
+            filter_parts.append(f"area_m2 <= {float(max_area)}")
 
         if gmina is not None:
-            filter_parts.append(f'gmina == "{gmina}"')
+            # Sanitize string input - escape quotes and validate length
+            if not isinstance(gmina, str) or len(gmina) > 100:
+                raise ValueError("gmina must be a string with max 100 chars")
+            safe_gmina = gmina.replace('"', '').replace("'", "").replace("\\", "")
+            filter_parts.append(f'gmina == "{safe_gmina}"')
 
         if has_mpzp is not None:
+            # Validate boolean input
+            if not isinstance(has_mpzp, bool):
+                raise ValueError("has_mpzp must be boolean")
             filter_parts.append(f"has_mpzp == {str(has_mpzp).lower()}")
 
         if exclude_ids:
-            # Milvus uses 'not in' for exclusion
-            ids_str = ", ".join([f'"{id}"' for id in exclude_ids])
-            filter_parts.append(f"id not in [{ids_str}]")
+            # Sanitize IDs - only allow alphanumeric, underscore, dash, dot, slash
+            import re
+            safe_ids = []
+            for id_val in exclude_ids:
+                if not isinstance(id_val, str) or len(id_val) > 50:
+                    continue
+                if re.match(r'^[\w\-./]+$', id_val):
+                    safe_ids.append(f'"{id_val}"')
+            if safe_ids:
+                ids_str = ", ".join(safe_ids)
+                filter_parts.append(f"id not in [{ids_str}]")
 
         filter_expr = " and ".join(filter_parts) if filter_parts else None
 

@@ -6,7 +6,7 @@ Read-only, never modified during conversation.
 """
 
 from pydantic import BaseModel, Field
-from typing import List, Dict
+from typing import List, Dict, Any
 
 
 class PropertyAdvisorCore(BaseModel):
@@ -21,9 +21,14 @@ class PropertyAdvisorCore(BaseModel):
 
     domain_expertise: List[str] = Field(default_factory=lambda: [
         "155,959 działek w Trójmieście (Gdańsk 93k, Gdynia 54k, Sopot 8k)",
-        "59 cech każdej działki: lokalizacja, POG, zabudowa, odległości, wskaźniki",
+        "68+ cech każdej działki: lokalizacja, POG, zabudowa, własność, odległości, wskaźniki",
+        "Własność: 78k prywatnych (można kupić!), 73k publicznych, 1k spółdzielczych",
+        "Status zabudowy: 61% niezabudowanych (idealnych pod budowę), 39% zabudowanych",
+        "Rozmiary: mała (<500m²), pod_dom (500-2000m²), duża (2000-5000m²), bardzo_duża (>5000m²)",
+        "POG: 4,399 stref planistycznych z parametrami zabudowy",
+        "Sąsiedztwo: 407k relacji między sąsiadującymi działkami",
+        "Dual embeddings: semantyczne (512-dim) + grafowe (256-dim)",
         "Orientacyjne ceny gruntów wg dzielnic (dane 2024-2026)",
-        "Plany Ogólne Gmin (POG): symbole stref, parametry zabudowy",
         "Wskaźniki jakościowe: cisza, natura, dostępność (0-100)",
     ])
 
@@ -72,8 +77,38 @@ class PropertyAdvisorCore(BaseModel):
         "nature": ["bardzo_zielona", "zielona", "umiarkowana", "zurbanizowana"],
         "accessibility": ["doskonala", "dobra", "umiarkowana", "ograniczona"],
         "building_density": ["gesta", "umiarkowana", "rzadka", "bardzo_rzadka"],
-        "area_category": ["mala", "pod_dom", "duza", "bardzo_duza"],
-        "charakter_terenu": ["wiejski", "podmiejski", "miejski", "lesny", "mieszany"],
+        "size_category": ["mala", "pod_dom", "duza", "bardzo_duza"],
+        "ownership_type": ["prywatna", "publiczna", "spoldzielcza", "koscielna", "inna"],
+        "build_status": ["zabudowana", "niezabudowana"],
+    })
+
+    # Wiedza o strukturze Neo4j v2
+    neo4j_knowledge: Dict[str, Any] = Field(default_factory=lambda: {
+        "ownership_stats": {
+            "prywatna": "78,249 działek - MOŻNA KUPIĆ!",
+            "publiczna": "73,478 działek (gminy, Skarb Państwa)",
+            "spoldzielcza": "1,008 działek",
+            "koscielna": "501 działek",
+            "inna": "527 działek",
+        },
+        "build_status_stats": {
+            "niezabudowana": "93,852 działek (60.6%) - idealne pod budowę",
+            "zabudowana": "61,107 działek (39.4%)",
+        },
+        "size_category_stats": {
+            "mala": "83,827 działek (<500m²)",
+            "pod_dom": "41,915 działek (500-2000m²) - IDEALNE POD DOM",
+            "duza": "17,772 działek (2000-5000m²)",
+            "bardzo_duza": "11,445 działek (>5000m²)",
+        },
+        "relations": {
+            "ADJACENT_TO": "407,825 relacji sąsiedztwa z długością wspólnej granicy",
+            "NEAR_SCHOOL": "226,069 relacji (threshold 2000m)",
+            "NEAR_SHOP": "747,483 relacji (threshold 1500m)",
+            "NEAR_BUS_STOP": "248,086 relacji (threshold 1000m)",
+            "NEAR_FOREST": "168,554 relacji (threshold 500m)",
+            "NEAR_WATER": "106,917 relacji (threshold 500m)",
+        },
     })
 
     class Config:

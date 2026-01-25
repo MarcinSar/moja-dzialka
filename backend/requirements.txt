@@ -39,6 +39,7 @@ srai>=0.7.0
 numpy>=1.26.3
 scipy>=1.12.0
 scikit-learn>=1.4.0
+sentence-transformers>=2.2.0
 
 # Anthropic API
 anthropic>=0.18.0

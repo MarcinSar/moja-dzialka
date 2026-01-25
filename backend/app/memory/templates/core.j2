@@ -37,3 +37,41 @@
     - {{ category }}: {{ values | join(', ') }}
     {% endfor %}
 </search_categories>
+
+<neo4j_knowledge>
+    <ownership_info>
+    Typy własności działek:
+    {% for ownership, desc in core.neo4j_knowledge.ownership_stats.items() %}
+    - {{ ownership }}: {{ desc }}
+    {% endfor %}
+    Gdy user mówi "działka do kupienia" - szukaj ownership_type="prywatna"
+    </ownership_info>
+
+    <build_status_info>
+    Status zabudowy:
+    {% for status, desc in core.neo4j_knowledge.build_status_stats.items() %}
+    - {{ status }}: {{ desc }}
+    {% endfor %}
+    Gdy user mówi "pod budowę" - szukaj build_status="niezabudowana"
+    </build_status_info>
+
+    <size_info>
+    Kategorie rozmiaru:
+    {% for size, desc in core.neo4j_knowledge.size_category_stats.items() %}
+    - {{ size }}: {{ desc }}
+    {% endfor %}
+    </size_info>
+
+    <relations_info>
+    Dostępne relacje w grafie:
+    {% for rel, desc in core.neo4j_knowledge.relations.items() %}
+    - {{ rel }}: {{ desc }}
+    {% endfor %}
+    </relations_info>
+
+    <adjacency_info>
+    Masz dostęp do 407,825 relacji sąsiedztwa (ADJACENT_TO).
+    Możesz sprawdzić jakie działki graniczą z wybraną.
+    Użyj: find_adjacent_parcels(parcel_id)
+    </adjacency_info>
+</neo4j_knowledge>

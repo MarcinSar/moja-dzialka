@@ -29,6 +29,7 @@ from app.services.diversity import (
     DiverseProposal,
     UserFeedback,
 )
+from app.services.embedding_service import EmbeddingService
 
 __all__ = [
     # Database connections
@@ -57,4 +58,7 @@ __all__ = [
     "SearchResult",
     "DiverseProposal",
     "UserFeedback",
+
+    # Embeddings
+    "EmbeddingService",
 ]
