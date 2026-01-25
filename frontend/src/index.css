@@ -279,3 +279,109 @@
 .typing-indicator span:nth-child(3) {
   animation-delay: 0.2s;
 }
+
+/* ============================================
+   Immersive Search Results Styles
+   ============================================ */
+
+/* Custom marker for immersive view */
+.custom-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Ping animation for spotlight markers */
+@keyframes ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.animate-ping {
+  animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Dark popup override for immersive map */
+.dark-popup .leaflet-popup-content-wrapper {
+  background: rgba(15, 23, 42, 0.95) !important;
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(51, 65, 85, 0.5) !important;
+}
+
+.dark-popup .leaflet-popup-tip {
+  background: rgba(15, 23, 42, 0.95) !important;
+}
+
+.parcel-popup h4 {
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: white;
+  margin-bottom: 0.5rem;
+}
+
+.parcel-popup .info-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.parcel-popup .info-label {
+  color: rgb(148, 163, 184);
+}
+
+.parcel-popup .info-value {
+  color: white;
+}
+
+/* Glassmorphism utilities */
+.glass-card {
+  @apply backdrop-blur-xl;
+  background: rgba(15, 23, 42, 0.4);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.glass-card-hover:hover {
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow:
+    0 8px 40px rgba(245, 158, 11, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Spotlight glow effect */
+.spotlight-glow {
+  box-shadow:
+    0 0 30px rgba(245, 158, 11, 0.3),
+    0 0 60px rgba(245, 158, 11, 0.1);
+}
+
+/* Radial gradient background */
+.bg-gradient-radial {
+  background: radial-gradient(circle at center, var(--tw-gradient-from) 0%, var(--tw-gradient-via) 50%, var(--tw-gradient-to) 100%);
+}
+
+/* Scrollbar thin variant */
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  @apply bg-slate-700/50 rounded-full;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-600/50;
+}

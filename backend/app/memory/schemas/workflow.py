@@ -6,8 +6,110 @@ Enables measuring conversion and identifying drop-off points.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
+
+
+# =============================================================================
+# LOCATION PREFERENCE (2026-01-25)
+# Hierarchical location structure for Polish administrative units
+# =============================================================================
+
+class LocationPreference(BaseModel):
+    """
+    Hierarchical location preference - scalable for Polish administrative structure.
+
+    IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not directly to gmina!
+
+    Hierarchy: województwo → powiat → gmina → miejscowość → dzielnica
+
+    In Trójmiasto MVP:
+    - gmina = miejscowość (Gdańsk, Gdynia, Sopot are both gmina and miejscowość)
+    - dzielnica belongs to miejscowość
+
+    In future (when adding gminy wiejskie like Żukowo):
+    - gmina "Żukowo" contains miejscowości "Żukowo", "Chwaszczyno", "Banino"
+    - dzielnica belongs to miejscowość (if any)
+    """
+    # Full administrative hierarchy
+    wojewodztwo: Optional[str] = None
+    powiat: Optional[str] = None
+    gmina: Optional[str] = None           # Administrative unit
+    miejscowosc: Optional[str] = None     # Settlement/town - DZIELNICA BELONGS HERE!
+    dzielnica: Optional[str] = None
+
+    # Textual description (e.g., "near the sea", "close to city center")
+    description: Optional[str] = None
+
+    # Validation status
+    validated: bool = False
+
+    def to_search_params(self) -> Dict[str, str]:
+        """Convert to search parameters for graph_service."""
+        params = {}
+        if self.gmina:
+            params["gmina"] = self.gmina
+        if self.miejscowosc:
+            # NOTE: miejscowosc maps to dzielnica field in Parcel nodes (MVP structure)
+            params["miejscowosc"] = self.miejscowosc
+        if self.dzielnica:
+            params["dzielnica"] = self.dzielnica
+        return params
+
+    def set_dzielnica(self, dzielnica: str, miejscowosc: str, gmina: Optional[str] = None):
+        """
+        Set dzielnica along with miejscowość (required!).
+        Dzielnica MUST have an associated miejscowość.
+
+        Args:
+            dzielnica: District name (e.g., "Osowa")
+            miejscowosc: Settlement name (e.g., "Gdańsk") - REQUIRED
+            gmina: Optional gmina for context (defaults to miejscowość in MVP)
+        """
+        self.dzielnica = dzielnica
+        self.miejscowosc = miejscowosc
+        if gmina:
+            self.gmina = gmina
+        elif not self.gmina and miejscowosc:
+            # In MVP: gmina = miejscowość
+            self.gmina = miejscowosc
+
+    def clear_dzielnica(self):
+        """Clear dzielnica when miejscowość changes."""
+        self.dzielnica = None
+
+    def update_from_resolved(self, resolved: Dict) -> None:
+        """Update from resolve_location() result."""
+        if resolved.get("resolved"):
+            if resolved.get("gmina"):
+                self.gmina = resolved["gmina"]
+            if resolved.get("miejscowosc"):
+                self.miejscowosc = resolved["miejscowosc"]
+            if resolved.get("dzielnica"):
+                self.dzielnica = resolved["dzielnica"]
+            self.validated = True
+
+    def __str__(self) -> str:
+        parts = []
+        if self.dzielnica:
+            parts.append(self.dzielnica)
+        if self.miejscowosc:
+            parts.append(self.miejscowosc)
+        elif self.gmina:
+            parts.append(self.gmina)
+        return ", ".join(parts) if parts else self.description or "brak"
+
+    def to_display_string(self) -> str:
+        """Human-readable location string."""
+        if self.dzielnica and self.miejscowosc:
+            return f"{self.dzielnica}, {self.miejscowosc}"
+        elif self.miejscowosc:
+            return self.miejscowosc
+        elif self.gmina:
+            return self.gmina
+        elif self.description:
+            return self.description
+        return "nie określono"
 
 
 class FunnelProgress(BaseModel):
@@ -25,7 +127,11 @@ class FunnelProgress(BaseModel):
     discovery_complete: bool = False
 
     # Partial info (what we know so far)
-    known_location: Optional[str] = None  # "Gdańsk", "Osowa", etc.
+    # CHANGED 2026-01-25: Use LocationPreference instead of simple string
+    known_location: Optional[str] = None  # DEPRECATED - use location instead
+    location: Optional[LocationPreference] = None  # Full hierarchical location
+    location_history: List[LocationPreference] = Field(default_factory=list)  # For "show other in same area"
+
     known_budget_max: Optional[int] = None
     known_size_range: Optional[str] = None  # "1000m2", "500-1000m2"
 
@@ -64,10 +170,15 @@ class FunnelProgress(BaseModel):
         We can search if we have at least location OR clear preferences OR
         preferences have been proposed (ready for approval/execution).
         """
-        return (
+        # CHANGED 2026-01-25: Check new location field too
+        has_location = (
             self.location_collected or
-            self.preferences_collected or
             self.known_location is not None or
+            (self.location is not None and (self.location.gmina or self.location.miejscowosc))
+        )
+        return (
+            has_location or
+            self.preferences_collected or
             self.preferences_proposed  # Can transition to search skill
         )
 
@@ -75,7 +186,12 @@ class FunnelProgress(BaseModel):
         """Check if discovery has enough info to proceed."""
         # At minimum: location
         # Ideally: location + (budget OR size OR preferences)
-        has_location = self.location_collected or self.known_location
+        # CHANGED 2026-01-25: Check new location field too
+        has_location = (
+            self.location_collected or
+            self.known_location or
+            (self.location is not None and (self.location.gmina or self.location.miejscowosc))
+        )
         has_criteria = self.budget_collected or self.size_collected or self.preferences_collected
         return has_location and has_criteria
 

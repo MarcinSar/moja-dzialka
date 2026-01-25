@@ -46,6 +46,10 @@ class SearchState(BaseModel):
     search_feedback: Optional[str] = None
     search_iteration: int = 0
 
+    # Index map: position (1, 2, 3...) → parcel ID
+    # Allows user to say "pokaż działkę 1" instead of full ID
+    parcel_index_map: Dict[int, str] = Field(default_factory=dict)
+
     # Selected parcels
     favorited_parcels: List[str] = Field(default_factory=list)
     rejected_parcels: List[str] = Field(default_factory=list)

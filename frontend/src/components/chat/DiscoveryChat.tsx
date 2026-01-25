@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { useChat, quickActions } from '@/hooks/useChat';
+import { useChat } from '@/hooks/useChat';
 import { useEffect, useRef } from 'react';
 
 // Minimal streaming cursor
@@ -83,7 +83,7 @@ function TypingIndicator() {
 }
 
 export function DiscoveryChat() {
-  const { input, setInput, messages, isAgentTyping, messagesEndRef, handleSubmit, sendMessage } = useChat();
+  const { input, setInput, messages, isAgentTyping, messagesEndRef, handleSubmit } = useChat();
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -160,36 +160,6 @@ export function DiscoveryChat() {
           </div>
         </div>
       </motion.form>
-
-      {/* Quick actions - subtle chips */}
-      <AnimatePresence>
-        {!hasMessages && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ delay: 0.3 }}
-            className="mt-6 flex flex-wrap gap-2"
-          >
-            {quickActions.map((action, index) => (
-              <motion.button
-                key={action.label}
-                onClick={() => sendMessage(action.query)}
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.4 + index * 0.05 }}
-                whileHover={{ scale: 1.02, color: '#fbbf24' }}
-                className="text-sm text-slate-500 hover:text-cyan-400 transition-colors"
-              >
-                {action.label === 'Blisko lasu' && '→ blisko lasu'}
-                {action.label === 'Pod miastem' && '→ pod miastem'}
-                {action.label === 'Z MPZP' && '→ z MPZP'}
-                {action.label === 'Nad wodą' && '→ nad wodą'}
-              </motion.button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }

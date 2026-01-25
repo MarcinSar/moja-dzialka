@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type UIPhase = 'discovery' | 'results' | 'transitioning';
+export type UIPhase = 'discovery' | 'search_results' | 'results' | 'transitioning';
 export type AvatarMood = 'idle' | 'thinking' | 'speaking' | 'excited';
 
 interface UIPhaseState {
@@ -10,12 +10,17 @@ interface UIPhaseState {
   hasMapData: boolean;
   isTransitioning: boolean;
 
+  // Spotlight state for hover synchronization
+  spotlightParcelId: string | null;
+
   // Actions
   setPhase: (phase: UIPhase) => void;
   transitionToResults: () => void;
+  transitionToSearchResults: () => void;
   transitionToDiscovery: () => void;
   setAvatarMood: (mood: AvatarMood) => void;
   setHasMapData: (has: boolean) => void;
+  setSpotlightParcel: (parcelId: string | null) => void;
 }
 
 export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
@@ -24,6 +29,7 @@ export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
   avatarMood: 'idle',
   hasMapData: false,
   isTransitioning: false,
+  spotlightParcelId: null,
 
   setPhase: (phase) => set({
     phase,
@@ -48,6 +54,24 @@ export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
     }, 50);
   },
 
+  transitionToSearchResults: () => {
+    const { phase } = get();
+    if (phase === 'search_results') return;
+
+    set({
+      isTransitioning: true,
+      previousPhase: phase
+    });
+
+    // Longer delay for dramatic transition animation
+    setTimeout(() => {
+      set({
+        phase: 'search_results',
+        isTransitioning: false
+      });
+    }, 100);
+  },
+
   transitionToDiscovery: () => {
     const { phase } = get();
     if (phase === 'discovery') return;
@@ -61,7 +85,8 @@ export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
       set({
         phase: 'discovery',
         isTransitioning: false,
-        hasMapData: false
+        hasMapData: false,
+        spotlightParcelId: null
       });
     }, 50);
   },
@@ -69,4 +94,6 @@ export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
   setAvatarMood: (mood) => set({ avatarMood: mood }),
 
   setHasMapData: (has) => set({ hasMapData: has }),
+
+  setSpotlightParcel: (parcelId) => set({ spotlightParcelId: parcelId }),
 }));

@@ -317,6 +317,62 @@ class MilvusManager:
 
 
 # =============================================================================
+# MONGODB
+# =============================================================================
+
+class MongoDBManager:
+    """MongoDB connection manager for leads and other collections."""
+
+    def __init__(self):
+        self._client = None
+        self._db = None
+
+    async def connect(self):
+        """Get MongoDB client and database."""
+        if self._client is None:
+            try:
+                from motor.motor_asyncio import AsyncIOMotorClient
+                self._client = AsyncIOMotorClient(settings.mongodb_uri)
+                # Extract database name from URI or use default
+                db_name = settings.mongodb_uri.split("/")[-1].split("?")[0]
+                if not db_name:
+                    db_name = "moja_dzialka"
+                self._db = self._client[db_name]
+                logger.info(f"MongoDB connected: {db_name}")
+            except ImportError:
+                logger.warning("motor not installed - MongoDB not available")
+                return None
+        return self._db
+
+    async def get_collection(self, name: str):
+        """Get a collection."""
+        db = await self.connect()
+        if db is None:
+            return None
+        return db[name]
+
+    async def health_check(self) -> bool:
+        """Check MongoDB connection."""
+        try:
+            db = await self.connect()
+            if db is None:
+                return False
+            # Ping the server
+            await self._client.admin.command("ping")
+            return True
+        except Exception as e:
+            logger.error(f"MongoDB health check failed: {e}")
+            return False
+
+    async def close(self):
+        """Close connection."""
+        if self._client:
+            self._client.close()
+            self._client = None
+            self._db = None
+
+
+# =============================================================================
 # REDIS
 # =============================================================================
 
@@ -374,6 +430,7 @@ class RedisManager:
 postgis = PostGISManager()
 neo4j = Neo4jManager()
 milvus = MilvusManager()
+mongodb = MongoDBManager()
 redis_cache = RedisManager()
 
 
@@ -426,6 +483,17 @@ async def check_all_connections() -> dict:
     except Exception as e:
         results["redis"] = {"connected": False, "error": str(e)}
 
+    # MongoDB
+    start = time.time()
+    try:
+        connected = await mongodb.health_check()
+        results["mongodb"] = {
+            "connected": connected,
+            "latency_ms": int((time.time() - start) * 1000)
+        }
+    except Exception as e:
+        results["mongodb"] = {"connected": False, "error": str(e)}
+
     return results
 
 
@@ -434,5 +502,6 @@ async def close_all_connections():
     await postgis.close()
     await neo4j.close()
     milvus.close()
+    await mongodb.close()
     await redis_cache.close()
     logger.info("All database connections closed")

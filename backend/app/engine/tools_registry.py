@@ -842,6 +842,152 @@ UŻYWAJ gdy:
             "required": ["parcel_id"]
         }
     },
+
+    # =========================================================================
+    # DYNAMIC LOCATION TOOLS (2026-01-25)
+    # Agent dynamically queries these instead of hardcoded lists
+    # =========================================================================
+    {
+        "name": "get_available_locations",
+        "description": """
+Pobierz dostępne lokalizacje DYNAMICZNIE z bazy danych.
+
+KIEDY UŻYWAĆ:
+- Na początku rozmowy, aby wiedzieć jakie lokalizacje są dostępne
+- Gdy user poda niejednoznaczną lokalizację
+- Zamiast zgadywać - ZAWSZE odpytuj bazę!
+
+Zwraca:
+- Lista miejscowości (Gdańsk, Gdynia, Sopot)
+- Lista gmin (w MVP = miejscowości)
+- Łączna liczba działek
+- Liczba działek per miejscowość
+
+WAŻNE: Nie używaj hardkodowanych list! System jest skalowalny.
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "get_districts_in_miejscowosc",
+        "description": """
+Pobierz dzielnice w danej MIEJSCOWOŚCI (nie gminie!).
+
+HIERARCHIA ADMINISTRACYJNA:
+- Gmina = jednostka administracyjna
+- Miejscowość = osada/miasto (gdzie ludzie mieszkają)
+- Dzielnica = część MIEJSCOWOŚCI!
+
+WAŻNE: Dzielnica należy do MIEJSCOWOŚCI, nie do gminy!
+- Osowa należy do miejscowości Gdańsk
+- Orłowo należy do miejscowości Gdynia
+- W Trójmieście: gmina = miejscowość (to samo)
+
+KIEDY UŻYWAĆ:
+- User podał miasto, chcesz pokazać dzielnice
+- User mówi "jakie dzielnice są w Gdańsku?"
+- Przed propose_search_preferences - sprawdź czy dzielnica istnieje
+
+Zwraca:
+- Lista dzielnic z liczbą działek
+- Gmina (dla kontekstu)
+- Miejscowość
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "miejscowosc": {
+                    "type": "string",
+                    "description": "Nazwa miejscowości (np. 'Gdańsk', 'Gdynia', 'Sopot')"
+                }
+            },
+            "required": ["miejscowosc"]
+        }
+    },
+    {
+        "name": "resolve_location",
+        "description": """
+KLUCZOWE NARZĘDZIE! Rozwiąż tekst lokalizacji do gmina + miejscowość + dzielnica.
+
+KIEDY UŻYWAĆ:
+- User podaje lokalizację tekstem (np. "okolice Osowej", "Orłowo", "Gdańsk")
+- ZAWSZE użyj tego przed propose_search_preferences!
+- Automatycznie wykrywa czy to miejscowość czy dzielnica
+
+ZWRACA:
+- resolved: true/false
+- gmina: np. "Gdańsk"
+- miejscowosc: np. "Gdańsk" (dzielnica należy do miejscowości!)
+- dzielnica: np. "Osowa" lub null
+- parcel_count: ile działek w tej lokalizacji
+
+PRZYKŁADY:
+- "Osowa" → {gmina: "Gdańsk", miejscowosc: "Gdańsk", dzielnica: "Osowa"}
+- "Orłowo" → {gmina: "Gdynia", miejscowosc: "Gdynia", dzielnica: "Orłowo"}
+- "Gdańsk" → {gmina: "Gdańsk", miejscowosc: "Gdańsk", dzielnica: null}
+- "Kartuzy" → {resolved: false, error: "nie w obsługiwanym obszarze"}
+
+WAŻNE: Dzielnica jest wykrywana automatycznie z bazy - nie trzeba znać miasta!
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location_text": {
+                    "type": "string",
+                    "description": "Tekst lokalizacji od użytkownika (np. 'okolice Osowej', 'Orłowo', 'w Gdańsku')"
+                }
+            },
+            "required": ["location_text"]
+        }
+    },
+    {
+        "name": "validate_location_combination",
+        "description": """
+Sprawdź czy kombinacja miejscowość + dzielnica jest poprawna.
+
+HIERARCHIA:
+- Dzielnica należy do MIEJSCOWOŚCI, nie do gminy!
+- Osowa należy do Gdańska
+- Orłowo należy do Gdyni
+- Niepoprawne: miejscowość="Gdańsk", dzielnica="Orłowo"
+
+KIEDY UŻYWAĆ:
+- User podał miasto i dzielnicę osobno
+- Weryfikacja przed wyszukiwaniem
+- Naprawa błędnych kombinacji
+
+Zwraca:
+- valid: true/false
+- error: jeśli niepoprawne, z wyjaśnieniem
+- suggestion: poprawna kombinacja
+
+PRZYKŁAD:
+validate_location_combination(miejscowosc="Gdańsk", dzielnica="Orłowo")
+→ {valid: false, error: "Orłowo należy do Gdyni, nie Gdańska",
+   suggestion: {miejscowosc: "Gdynia", dzielnica: "Orłowo"}}
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "miejscowosc": {
+                    "type": "string",
+                    "description": "Miejscowość do walidacji"
+                },
+                "dzielnica": {
+                    "type": "string",
+                    "description": "Dzielnica do walidacji"
+                },
+                "gmina": {
+                    "type": "string",
+                    "description": "Gmina (opcjonalna, dla dodatkowej walidacji)"
+                }
+            },
+            "required": ["dzielnica"]
+        }
+    },
 ]
 
 

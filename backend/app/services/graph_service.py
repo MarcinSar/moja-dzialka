@@ -1413,6 +1413,381 @@ class GraphService:
             logger.error(f"Get water statistics error: {e}")
             return {"error": str(e)}
 
+    # =========================================================================
+    # DYNAMIC LOCATION METHODS (New - 2026-01-25)
+    # Agent dynamically queries these instead of hardcoded lists
+    # =========================================================================
+
+    async def get_available_locations(self) -> Dict[str, Any]:
+        """
+        Get available locations dynamically from the database.
+
+        Agent uses this at conversation start or when user gives ambiguous location.
+        Returns miejscowości and gminy separately (in MVP they're the same).
+
+        Returns:
+            Dict with miejscowosci, gminy, total_parcels, by_miejscowosc
+        """
+        query = """
+            MATCH (c:City)
+            OPTIONAL MATCH (p:Parcel) WHERE p.gmina = c.name
+            WITH c.name as miejscowosc, count(p) as parcel_count
+            RETURN miejscowosc, parcel_count
+            ORDER BY parcel_count DESC
+        """
+
+        try:
+            results = await neo4j.run(query)
+            miejscowosci = [r["miejscowosc"] for r in results if r["miejscowosc"]]
+            by_miejscowosc = {r["miejscowosc"]: r["parcel_count"] for r in results if r["miejscowosc"]}
+            total = sum(by_miejscowosc.values())
+
+            return {
+                "miejscowosci": miejscowosci,
+                "gminy": miejscowosci,  # In MVP they're the same, later separate query
+                "total_parcels": total,
+                "by_miejscowosc": by_miejscowosc,
+                "hint": "Obecnie obsługujemy Trójmiasto (Gdańsk, Gdynia, Sopot). Podaj miejscowość lub dzielnicę."
+            }
+        except Exception as e:
+            logger.error(f"Get available locations error: {e}")
+            return {"error": str(e), "miejscowosci": [], "gminy": [], "total_parcels": 0}
+
+    async def get_districts_in_miejscowosc(self, miejscowosc: str) -> Dict[str, Any]:
+        """
+        Get districts in a given MIEJSCOWOŚĆ (not gmina!).
+
+        Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina directly.
+        In MVP: gmina = miejscowość (Trójmiasto cities).
+
+        Args:
+            miejscowosc: Name of the miejscowość (e.g., "Gdańsk")
+
+        Returns:
+            Dict with districts list, counts, and gmina context
+        """
+        query = """
+            MATCH (d:District)-[:BELONGS_TO]->(c:City {name: $miejscowosc})
+            OPTIONAL MATCH (p:Parcel)-[:LOCATED_IN]->(d)
+            WITH d.name as dzielnica, count(p) as parcel_count
+            RETURN dzielnica, parcel_count
+            ORDER BY parcel_count DESC
+        """
+
+        try:
+            results = await neo4j.run(query, {"miejscowosc": miejscowosc})
+            districts = [r["dzielnica"] for r in results if r["dzielnica"]]
+            by_district = {r["dzielnica"]: r["parcel_count"] for r in results if r["dzielnica"]}
+
+            # In MVP: gmina = miejscowość
+            gmina = await self._get_gmina_for_miejscowosc(miejscowosc)
+
+            total_parcels = sum(by_district.values())
+
+            return {
+                "miejscowosc": miejscowosc,
+                "gmina": gmina,
+                "districts": districts,
+                "district_count": len(districts),
+                "parcel_count": total_parcels,
+                "by_district": by_district
+            }
+        except Exception as e:
+            logger.error(f"Get districts in miejscowość error: {e}")
+            return {"error": str(e), "miejscowosc": miejscowosc, "districts": []}
+
+    async def resolve_location(self, location_text: str) -> Dict[str, Any]:
+        """
+        Resolve user's location text to gmina + miejscowosc + dzielnica.
+
+        IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not directly to gmina!
+
+        Args:
+            location_text: Raw text from user (e.g., "okolice Osowej", "Orłowo", "Gdańsk")
+
+        Returns:
+            Dict with resolved: bool, gmina, miejscowosc, dzielnica, parcel_count
+            or error if not found
+        """
+        text_lower = location_text.lower().strip()
+
+        # Remove common prefixes
+        prefixes_to_remove = [
+            "okolice ", "okolica ", "gmina ", "miasto ", "m. ", "dzielnica ",
+            "rejon ", "w ", "na ", "blisko ", "centrum "
+        ]
+        for prefix in prefixes_to_remove:
+            if text_lower.startswith(prefix):
+                text_lower = text_lower[len(prefix):].strip()
+
+        # Handle genitive forms (Polish grammar)
+        # Gdańska -> Gdańsk, Gdyni -> Gdynia, Sopotu -> Sopot
+        text_variants = [text_lower]
+        if text_lower.endswith("a"):
+            text_variants.append(text_lower[:-1])  # Gdańska -> Gdańsk
+        if text_lower.endswith("i"):
+            text_variants.append(text_lower[:-1] + "a")  # Gdyni -> Gdynia
+        if text_lower.endswith("u"):
+            text_variants.append(text_lower[:-1])  # Sopotu -> Sopot
+
+        try:
+            locations = await self.get_available_locations()
+
+            # 1. Check if it's a miejscowość (city)
+            for miejscowosc in locations.get("miejscowosci", []):
+                miejscowosc_lower = miejscowosc.lower()
+                if any(v == miejscowosc_lower or miejscowosc_lower in v or v in miejscowosc_lower
+                       for v in text_variants):
+                    gmina = await self._get_gmina_for_miejscowosc(miejscowosc)
+                    return {
+                        "resolved": True,
+                        "gmina": gmina,
+                        "miejscowosc": miejscowosc,
+                        "dzielnica": None,
+                        "parcel_count": locations.get("by_miejscowosc", {}).get(miejscowosc, 0)
+                    }
+
+            # 2. Check if it's a dzielnica - search all miejscowości
+            for miejscowosc in locations.get("miejscowosci", []):
+                districts_data = await self.get_districts_in_miejscowosc(miejscowosc)
+                for dzielnica in districts_data.get("districts", []):
+                    dzielnica_lower = dzielnica.lower()
+                    if any(v == dzielnica_lower or dzielnica_lower in v or v in dzielnica_lower
+                           for v in text_variants):
+                        return {
+                            "resolved": True,
+                            "gmina": districts_data.get("gmina"),
+                            "miejscowosc": miejscowosc,  # Dzielnica belongs to miejscowość!
+                            "dzielnica": dzielnica,
+                            "parcel_count": districts_data.get("by_district", {}).get(dzielnica, 0)
+                        }
+
+            # 3. Not found
+            return {
+                "resolved": False,
+                "error": f"Lokalizacja '{location_text}' nie została rozpoznana.",
+                "available_miejscowosci": locations.get("miejscowosci", []),
+                "hint": "Podaj nazwę miasta (Gdańsk, Gdynia, Sopot) lub dzielnicy."
+            }
+
+        except Exception as e:
+            logger.error(f"Resolve location error: {e}")
+            return {"resolved": False, "error": str(e)}
+
+    async def validate_location_combination(
+        self,
+        miejscowosc: Optional[str] = None,
+        dzielnica: Optional[str] = None,
+        gmina: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Validate if miejscowość + dzielnica combination is correct.
+
+        IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina!
+
+        Args:
+            miejscowosc: City/miejscowość name
+            dzielnica: District name
+            gmina: Optional gmina for additional validation
+
+        Returns:
+            Dict with valid: bool, error if invalid, suggestion if available
+        """
+        if not dzielnica:
+            # No dzielnica to validate
+            return {"valid": True, "message": "Brak dzielnicy do walidacji"}
+
+        try:
+            # Find which miejscowość this dzielnica belongs to
+            locations = await self.get_available_locations()
+
+            for mw in locations.get("miejscowosci", []):
+                districts_data = await self.get_districts_in_miejscowosc(mw)
+                districts_lower = [d.lower() for d in districts_data.get("districts", [])]
+
+                if dzielnica.lower() in districts_lower:
+                    # Found the dzielnica
+                    actual_dzielnica = districts_data["districts"][districts_lower.index(dzielnica.lower())]
+
+                    if miejscowosc and mw.lower() != miejscowosc.lower():
+                        # Dzielnica belongs to different miejscowość!
+                        return {
+                            "valid": False,
+                            "error": f"Dzielnica '{actual_dzielnica}' należy do miejscowości '{mw}', nie '{miejscowosc}'.",
+                            "suggestion": {
+                                "miejscowosc": mw,
+                                "dzielnica": actual_dzielnica,
+                                "gmina": districts_data.get("gmina")
+                            }
+                        }
+
+                    # Valid combination
+                    return {
+                        "valid": True,
+                        "miejscowosc": mw,
+                        "dzielnica": actual_dzielnica,
+                        "gmina": districts_data.get("gmina"),
+                        "parcel_count": districts_data.get("by_district", {}).get(actual_dzielnica, 0)
+                    }
+
+            # Dzielnica not found
+            return {
+                "valid": False,
+                "error": f"Dzielnica '{dzielnica}' nie została znaleziona w żadnej miejscowości.",
+                "available_miejscowosci": locations.get("miejscowosci", [])
+            }
+
+        except Exception as e:
+            logger.error(f"Validate location combination error: {e}")
+            return {"valid": False, "error": str(e)}
+
+    async def _get_gmina_for_miejscowosc(self, miejscowosc: str) -> str:
+        """
+        Get gmina for a given miejscowość.
+
+        In MVP: gmina = miejscowość (Trójmiasto cities).
+        In future: query database for gminy with multiple miejscowości (e.g., Żukowo).
+
+        Args:
+            miejscowosc: Name of the miejscowość
+
+        Returns:
+            Gmina name
+        """
+        # In MVP, gmina = miejscowość for Trójmiasto
+        # TODO: When adding gminy wiejskie, query:
+        # MATCH (m:Miejscowosc {name: $miejscowosc})-[:PART_OF]->(g:Gmina)
+        # RETURN g.name
+        return miejscowosc
+
+    async def search_parcels_randomized(
+        self,
+        criteria: ParcelSearchCriteria,
+        exclude_ids: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search parcels with randomization for repeated searches.
+
+        Uses rand() ordering to return different results each time.
+        Excludes already shown parcel IDs.
+
+        Args:
+            criteria: Search criteria
+            exclude_ids: List of parcel IDs to exclude (already shown)
+
+        Returns:
+            List of parcel dictionaries
+        """
+        # Build base query similar to search_parcels
+        match_clauses = ["MATCH (p:Parcel)"]
+        where_conditions = []
+        params = {"limit": criteria.limit}
+
+        # Exclude already shown parcels
+        if exclude_ids:
+            where_conditions.append("NOT p.id_dzialki IN $exclude_ids")
+            params["exclude_ids"] = exclude_ids
+
+        # Location filters
+        if criteria.gmina:
+            where_conditions.append("p.gmina = $gmina")
+            params["gmina"] = criteria.gmina
+
+        if criteria.miejscowosc:
+            where_conditions.append("p.dzielnica = $dzielnica")
+            params["dzielnica"] = criteria.miejscowosc
+
+        # Area filters
+        if criteria.min_area_m2:
+            where_conditions.append("p.area_m2 >= $min_area")
+            params["min_area"] = criteria.min_area_m2
+
+        if criteria.max_area_m2:
+            where_conditions.append("p.area_m2 <= $max_area")
+            params["max_area"] = criteria.max_area_m2
+
+        # Category filters via relationships
+        if criteria.quietness_categories:
+            match_clauses.append("MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)")
+            where_conditions.append("qc.id IN $quietness_cats")
+            params["quietness_cats"] = criteria.quietness_categories
+
+        if criteria.nature_categories:
+            match_clauses.append("MATCH (p)-[:HAS_NATURE]->(nc:NatureCategory)")
+            where_conditions.append("nc.id IN $nature_cats")
+            params["nature_cats"] = criteria.nature_categories
+
+        if criteria.building_density:
+            match_clauses.append("MATCH (p)-[:HAS_DENSITY]->(dc:DensityCategory)")
+            where_conditions.append("dc.id IN $density")
+            params["density"] = criteria.building_density
+
+        if criteria.accessibility_categories:
+            match_clauses.append("MATCH (p)-[:HAS_ACCESS]->(ac:AccessCategory)")
+            where_conditions.append("ac.id IN $access_cats")
+            params["access_cats"] = criteria.accessibility_categories
+
+        # POI proximity filters
+        if criteria.max_dist_to_forest_m:
+            where_conditions.append("p.dist_to_forest <= $max_forest_dist")
+            params["max_forest_dist"] = criteria.max_dist_to_forest_m
+
+        if criteria.max_dist_to_water_m:
+            where_conditions.append("p.dist_to_water <= $max_water_dist")
+            params["max_water_dist"] = criteria.max_dist_to_water_m
+
+        # MPZP filters
+        if criteria.has_mpzp is not None:
+            if criteria.has_mpzp:
+                where_conditions.append("p.pog_symbol IS NOT NULL")
+            else:
+                where_conditions.append("p.pog_symbol IS NULL")
+
+        if criteria.mpzp_buildable:
+            where_conditions.append("p.is_residential_zone = true")
+
+        # Build WHERE clause
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+
+        # RANDOM ordering for different results each time
+        query = f"""
+            {chr(10).join(match_clauses)}
+            {where_clause}
+            WITH p, rand() as r
+            ORDER BY r
+            LIMIT $limit
+            RETURN DISTINCT
+                p.id_dzialki as id,
+                p.gmina as gmina,
+                p.dzielnica as miejscowosc,
+                p.area_m2 as area_m2,
+                p.quietness_score as quietness_score,
+                p.nature_score as nature_score,
+                p.accessibility_score as accessibility_score,
+                p.pog_symbol IS NOT NULL as has_mpzp,
+                p.pog_symbol as mpzp_symbol,
+                p.centroid_lat as lat,
+                p.centroid_lon as lon,
+                p.dist_to_forest as dist_to_forest,
+                p.dist_to_water as dist_to_water,
+                p.dist_to_school as dist_to_school,
+                p.dist_to_supermarket as dist_to_shop,
+                p.pct_forest_500m as pct_forest_500m,
+                p.kategoria_ciszy as kategoria_ciszy,
+                p.kategoria_natury as kategoria_natury
+        """
+
+        logger.info(f"Randomized search with {len(where_conditions)} conditions, excluding {len(exclude_ids or [])} parcels")
+
+        try:
+            results = await neo4j.run(query, params)
+            return [dict(r) for r in results]
+        except Exception as e:
+            logger.error(f"Randomized search error: {e}")
+            return []
+
 
 # Global instance
 graph_service = GraphService()

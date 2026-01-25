@@ -83,11 +83,11 @@ class SpatialService:
             query_params["gmina"] = params.gmina
 
         if params.has_mpzp is not None:
-            conditions.append("has_mpzp = :has_mpzp")
+            conditions.append("has_pog = :has_mpzp")
             query_params["has_mpzp"] = params.has_mpzp
 
         if params.mpzp_budowlane is not None:
-            conditions.append("mpzp_czy_budowlane = :mpzp_budowlane")
+            conditions.append("is_residential_zone = :mpzp_budowlane")
             query_params["mpzp_budowlane"] = params.mpzp_budowlane
 
         where_clause = " AND ".join(conditions)
@@ -104,9 +104,9 @@ class SpatialService:
                 p.gmina,
                 p.miejscowosc,
                 p.area_m2,
-                p.has_mpzp,
-                p.mpzp_symbol,
-                p.mpzp_czy_budowlane,
+                p.has_pog as has_mpzp,
+                p.pog_symbol as mpzp_symbol,
+                p.is_residential_zone as mpzp_czy_budowlane,
                 p.quietness_score,
                 p.nature_score,
                 p.accessibility_score,
@@ -152,8 +152,9 @@ class SpatialService:
                 p.gmina,
                 p.miejscowosc,
                 p.area_m2,
-                p.has_mpzp,
-                p.mpzp_symbol,
+                p.has_pog as has_mpzp,
+                p.pog_symbol as mpzp_symbol,
+                p.is_residential_zone as mpzp_czy_budowlane,
                 p.quietness_score,
                 p.nature_score,
                 p.accessibility_score,
@@ -194,44 +195,58 @@ class SpatialService:
         Returns:
             Parcel details dictionary or None
         """
-        geom_select = f", ST_AsGeoJSON(ST_Transform(geom, {self.WGS84_CRS})) as geojson" if include_geometry else ""
+        geom_select = f", ST_AsGeoJSON(ST_Transform(geom, {self.WGS84_CRS})) as geometry_wgs84" if include_geometry else ""
 
         query = f"""
             SELECT
                 id_dzialki,
-                teryt_powiat,
                 gmina,
                 powiat,
+                dzielnica,
                 miejscowosc,
-                rodzaj_miejscowosci,
-                charakter_terenu,
                 area_m2,
-                compactness,
-                forest_ratio,
-                water_ratio,
-                builtup_ratio,
                 centroid_lat,
                 centroid_lon,
                 dist_to_school,
-                dist_to_shop,
-                dist_to_hospital,
+                dist_to_supermarket as dist_to_shop,
+                dist_to_doctors as dist_to_hospital,
                 dist_to_bus_stop,
-                dist_to_public_road,
                 dist_to_main_road,
                 dist_to_forest,
                 dist_to_water,
                 dist_to_industrial,
+                dist_to_pharmacy,
                 pct_forest_500m,
                 pct_water_500m,
                 count_buildings_500m,
-                has_mpzp,
-                mpzp_symbol,
-                mpzp_przeznaczenie,
-                mpzp_czy_budowlane,
+                -- POG fields (all)
+                has_pog,
+                pog_symbol,
+                pog_nazwa,
+                pog_oznaczenie,
+                pog_profil_podstawowy,
+                pog_profil_podstawowy_nazwy,
+                pog_profil_dodatkowy,
+                pog_profil_dodatkowy_nazwy,
+                pog_maks_intensywnosc,
+                pog_maks_wysokosc_m,
+                pog_maks_zabudowa_pct,
+                pog_min_bio_pct,
+                is_residential_zone,
+                -- Scores
                 quietness_score,
                 nature_score,
                 accessibility_score,
-                has_public_road_access
+                (dist_to_main_road < 50) as has_public_road_access,
+                -- Building info
+                is_built,
+                building_count,
+                building_coverage_pct,
+                -- Categories
+                kategoria_ciszy,
+                kategoria_natury,
+                kategoria_dostepu,
+                gestosc_zabudowy
                 {geom_select}
             FROM parcels
             WHERE id_dzialki = :parcel_id
@@ -240,7 +255,12 @@ class SpatialService:
         try:
             results = await postgis.execute(query, {"parcel_id": parcel_id})
             if results:
-                return dict(results[0]._mapping)
+                row = dict(results[0]._mapping)
+                # Parse geometry_wgs84 from JSON string if present
+                if row.get("geometry_wgs84") and isinstance(row["geometry_wgs84"], str):
+                    import json
+                    row["geometry_wgs84"] = json.loads(row["geometry_wgs84"])
+                return row
             return None
         except Exception as e:
             logger.error(f"Get parcel details error: {e}")
@@ -272,15 +292,17 @@ class SpatialService:
                 id_dzialki,
                 gmina,
                 miejscowosc,
+                dzielnica,
                 area_m2,
-                has_mpzp,
-                mpzp_symbol,
-                mpzp_czy_budowlane,
+                has_pog as has_mpzp,
+                pog_symbol as mpzp_symbol,
+                is_residential_zone as mpzp_czy_budowlane,
                 quietness_score,
                 nature_score,
                 accessibility_score,
                 centroid_lat,
-                centroid_lon
+                centroid_lon,
+                (dist_to_main_road < 50) as has_public_road_access
                 {geom_select}
             FROM parcels
             WHERE id_dzialki = ANY(:parcel_ids)
@@ -335,11 +357,11 @@ class SpatialService:
             query_params["max_area"] = max_area
 
         if has_mpzp is not None:
-            conditions.append("has_mpzp = :has_mpzp")
+            conditions.append("has_pog = :has_mpzp")
             query_params["has_mpzp"] = has_mpzp
 
         if mpzp_budowlane is not None:
-            conditions.append("mpzp_czy_budowlane = :mpzp_budowlane")
+            conditions.append("is_residential_zone = :mpzp_budowlane")
             query_params["mpzp_budowlane"] = mpzp_budowlane
 
         if min_quietness:
@@ -367,10 +389,11 @@ class SpatialService:
                 id_dzialki,
                 gmina,
                 miejscowosc,
+                dzielnica,
                 area_m2,
-                has_mpzp,
-                mpzp_symbol,
-                mpzp_czy_budowlane,
+                has_pog as has_mpzp,
+                pog_symbol as mpzp_symbol,
+                is_residential_zone as mpzp_czy_budowlane,
                 quietness_score,
                 nature_score,
                 accessibility_score,
@@ -403,7 +426,7 @@ class SpatialService:
             query_params["gmina"] = gmina
 
         if has_mpzp is not None:
-            conditions.append("has_mpzp = :has_mpzp")
+            conditions.append("has_pog = :has_mpzp")
             query_params["has_mpzp"] = has_mpzp
 
         where_clause = " AND ".join(conditions)
@@ -435,14 +458,13 @@ class SpatialService:
         query = """
             SELECT
                 gmina,
-                teryt_powiat as teryt,
                 COUNT(*) as parcel_count,
                 AVG(area_m2) as avg_area_m2,
-                100.0 * SUM(CASE WHEN has_mpzp THEN 1 ELSE 0 END) / COUNT(*) as mpzp_coverage_pct,
+                100.0 * SUM(CASE WHEN has_pog THEN 1 ELSE 0 END) / COUNT(*) as mpzp_coverage_pct,
                 ARRAY_AGG(DISTINCT miejscowosc) FILTER (WHERE miejscowosc IS NOT NULL) as miejscowosci
             FROM parcels
             WHERE gmina = :gmina_name
-            GROUP BY gmina, teryt_powiat
+            GROUP BY gmina
         """
         try:
             results = await postgis.execute(query, {"gmina_name": gmina_name})
@@ -450,7 +472,6 @@ class SpatialService:
                 row = results[0]._mapping
                 return {
                     "gmina": row["gmina"],
-                    "teryt": row["teryt"],
                     "parcel_count": row["parcel_count"],
                     "avg_area_m2": float(row["avg_area_m2"]) if row["avg_area_m2"] else None,
                     "mpzp_coverage_pct": float(row["mpzp_coverage_pct"]) if row["mpzp_coverage_pct"] else 0,
@@ -495,12 +516,13 @@ class SpatialService:
                 id_dzialki,
                 gmina,
                 miejscowosc,
+                dzielnica,
                 area_m2,
                 quietness_score,
                 nature_score,
                 accessibility_score,
-                has_mpzp,
-                mpzp_symbol,
+                has_pog as has_mpzp,
+                pog_symbol as mpzp_symbol,
                 centroid_lat,
                 centroid_lon,
                 ST_AsGeoJSON(ST_Transform(geom, {self.WGS84_CRS}))::json as geometry

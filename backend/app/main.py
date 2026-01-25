@@ -16,6 +16,7 @@ from app.services.database import check_all_connections, close_all_connections
 from app.api.conversation_v2 import router as conversation_router
 from app.api.search import router as search_router
 from app.api.lidar import router as lidar_router
+from app.api.leads import router as leads_router
 
 
 @asynccontextmanager
@@ -64,6 +65,7 @@ app.add_middleware(
 app.include_router(conversation_router, prefix="/api")  # /api/v2/conversation
 app.include_router(search_router, prefix="/api/v1")     # Search stays at v1 (no changes needed)
 app.include_router(lidar_router, prefix="/api/v1")      # LiDAR stays at v1
+app.include_router(leads_router, prefix="/api/v1")      # Leads at v1
 
 
 # =============================================================================
@@ -127,6 +129,10 @@ async def api_info():
                 "status": "GET /api/v1/lidar/status/{job_id}",
                 "check": "GET /api/v1/lidar/check",
                 "tile": "GET /api/v1/lidar/tile/{tile_id}/{path}",
+            },
+            "leads": {
+                "submit": "POST /api/v1/leads",
+                "count": "GET /api/v1/leads/count",
             },
             "health": {
                 "root": "GET /",

@@ -105,7 +105,7 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:-secretpassword}
       - REDIS_URL=redis://redis:6379
-      - MONGO_URL=mongodb://mongo:27017
+      - MONGODB_URI=mongodb://mongo:27017/moja_dzialka
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PERSISTENCE_BACKEND=${PERSISTENCE_BACKEND:-redis}
     ports:

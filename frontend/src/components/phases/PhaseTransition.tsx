@@ -1,6 +1,7 @@
 import { AnimatePresence, LayoutGroup } from 'motion/react';
 import { useUIPhaseStore } from '../../stores/uiPhaseStore';
 import { DiscoveryPhase } from './DiscoveryPhase';
+import { SearchResultsLayout } from './SearchResultsLayout';
 import { ResultsPhase } from './ResultsPhase';
 
 interface PhaseTransitionProps {
@@ -15,6 +16,9 @@ export function PhaseTransition({ stats }: PhaseTransitionProps) {
       <AnimatePresence mode="wait">
         {phase === 'discovery' && (
           <DiscoveryPhase key="discovery" />
+        )}
+        {phase === 'search_results' && (
+          <SearchResultsLayout key="search_results" />
         )}
         {phase === 'results' && (
           <ResultsPhase key="results" stats={stats} />

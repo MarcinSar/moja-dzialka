@@ -183,8 +183,9 @@ async def get_parcel_details(
 
         return ParcelDetails(
             id_dzialki=details.get("id_dzialki"),
-            teryt_powiat=details.get("teryt_powiat"),
+            teryt_powiat=details.get("powiat"),
             gmina=details.get("gmina"),
+            dzielnica=details.get("dzielnica"),
             miejscowosc=details.get("miejscowosc"),
             centroid_lat=details.get("centroid_lat"),
             centroid_lon=details.get("centroid_lon"),
@@ -197,20 +198,42 @@ async def get_parcel_details(
             dist_to_shop=details.get("dist_to_shop"),
             dist_to_hospital=details.get("dist_to_hospital"),
             dist_to_bus_stop=details.get("dist_to_bus_stop"),
-            dist_to_public_road=details.get("dist_to_public_road"),
+            dist_to_public_road=details.get("dist_to_main_road"),
             dist_to_forest=details.get("dist_to_forest"),
             dist_to_water=details.get("dist_to_water"),
+            dist_to_pharmacy=details.get("dist_to_pharmacy"),
             pct_forest_500m=details.get("pct_forest_500m"),
             pct_water_500m=details.get("pct_water_500m"),
             count_buildings_500m=details.get("count_buildings_500m"),
-            has_mpzp=details.get("has_mpzp"),
-            mpzp_symbol=details.get("mpzp_symbol"),
-            mpzp_przeznaczenie=details.get("mpzp_przeznaczenie"),
-            mpzp_budowlane=details.get("mpzp_czy_budowlane"),
+            # POG fields (all)
+            has_pog=details.get("has_pog"),
+            pog_symbol=details.get("pog_symbol"),
+            pog_nazwa=details.get("pog_nazwa"),
+            pog_oznaczenie=details.get("pog_oznaczenie"),
+            pog_profil_podstawowy=details.get("pog_profil_podstawowy"),
+            pog_profil_podstawowy_nazwy=details.get("pog_profil_podstawowy_nazwy"),
+            pog_profil_dodatkowy=details.get("pog_profil_dodatkowy"),
+            pog_profil_dodatkowy_nazwy=details.get("pog_profil_dodatkowy_nazwy"),
+            pog_maks_intensywnosc=details.get("pog_maks_intensywnosc"),
+            pog_maks_wysokosc_m=details.get("pog_maks_wysokosc_m"),
+            pog_maks_zabudowa_pct=details.get("pog_maks_zabudowa_pct"),
+            pog_min_bio_pct=details.get("pog_min_bio_pct"),
+            is_residential_zone=details.get("is_residential_zone"),
+            # Scores
             quietness_score=details.get("quietness_score"),
             nature_score=details.get("nature_score"),
             accessibility_score=details.get("accessibility_score"),
             has_public_road_access=details.get("has_public_road_access"),
+            # Building info
+            is_built=details.get("is_built"),
+            building_count=details.get("building_count"),
+            building_coverage_pct=details.get("building_coverage_pct"),
+            # Categories
+            kategoria_ciszy=details.get("kategoria_ciszy"),
+            kategoria_natury=details.get("kategoria_natury"),
+            kategoria_dostepu=details.get("kategoria_dostepu"),
+            gestosc_zabudowy=details.get("gestosc_zabudowy"),
+            # Geometry
             geometry_wgs84=details.get("geometry_wgs84") if include_geometry else None,
         )
 

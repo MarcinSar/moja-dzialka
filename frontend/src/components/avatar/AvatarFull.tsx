@@ -1,322 +1,284 @@
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { motion, useAnimation, useMotionValue, useTransform, useSpring } from 'motion/react';
+import { useEffect, useMemo, useState, useRef } from 'react';
+import { motion, useMotionValue, useSpring } from 'motion/react';
 import { useUIPhaseStore, AvatarMood } from '../../stores/uiPhaseStore';
+import { useChatStore } from '../../stores/chatStore';
 
-// Organic blob shape generator with time-based morphing
-function generateBlobPath(complexity: number, variance: number, phase: number, time: number = 0): string {
-  const points: string[] = [];
-  const angleStep = (Math.PI * 2) / complexity;
+// Shape types for morphing
+type ShapeType = 'sphere' | 'ring' | 'helix' | 'wave' | 'burst';
 
-  for (let i = 0; i < complexity; i++) {
-    const angle = i * angleStep + phase;
-    // Add time-based wobble for continuous morphing
-    const wobble = Math.sin(time * 0.002 + i * 0.5) * 8 + Math.cos(time * 0.003 + i * 0.7) * 5;
-    const radius = 80 + Math.sin(angle * 3 + phase + time * 0.001) * variance + Math.cos(angle * 2) * (variance * 0.5) + wobble;
-    const x = 100 + Math.cos(angle) * radius;
-    const y = 100 + Math.sin(angle) * radius;
-    points.push(`${x},${y}`);
-  }
+// Generate points for different shapes
+function generateShapePoints(
+  shape: ShapeType,
+  count: number,
+  radius: number,
+  time: number
+): Array<{ x: number; y: number; z: number }> {
+  const points = [];
+  const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle
 
-  // Create smooth curve through points
-  let path = `M ${points[0]}`;
-  for (let i = 0; i < points.length; i++) {
-    const p0 = points[(i - 1 + points.length) % points.length].split(',').map(Number);
-    const p1 = points[i].split(',').map(Number);
-    const p2 = points[(i + 1) % points.length].split(',').map(Number);
-    const p3 = points[(i + 2) % points.length].split(',').map(Number);
+  for (let i = 0; i < count; i++) {
+    const t = i / (count - 1);
+    let x = 0, y = 0, z = 0;
 
-    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
-    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
-
-    path += ` C ${cp1x},${cp1y} ${cp2x},${cp2y} ${p2[0]},${p2[1]}`;
-  }
-
-  return path + ' Z';
-}
-
-// Flowing particles that orbit around
-function FlowingParticles({ mood = 'idle', count = 24 }: { mood: AvatarMood; count?: number }) {
-  const isActive = mood !== 'idle';
-  const isExcited = mood === 'excited';
-
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      {Array.from({ length: count }).map((_, i) => {
+    switch (shape) {
+      case 'sphere': {
+        const yPos = 1 - t * 2;
+        const radiusAtY = Math.sqrt(1 - yPos * yPos);
+        const theta = phi * i;
+        x = Math.cos(theta) * radiusAtY * radius;
+        y = yPos * radius;
+        z = Math.sin(theta) * radiusAtY * radius;
+        break;
+      }
+      case 'ring': {
         const angle = (i / count) * Math.PI * 2;
-        const distance = 160 + (i % 3) * 35;
-        const size = 2 + (i % 4);
-        const delay = i * 0.1;
+        const ringRadius = radius * 0.8;
+        x = Math.cos(angle) * ringRadius;
+        y = Math.sin(angle * 3 + time * 0.5) * 15;
+        z = Math.sin(angle) * ringRadius;
+        break;
+      }
+      case 'helix': {
+        const helixAngle = (i / count) * Math.PI * 4;
+        const helixRadius = radius * 0.5;
+        x = Math.cos(helixAngle) * helixRadius;
+        y = (t - 0.5) * radius * 2;
+        z = Math.sin(helixAngle) * helixRadius;
+        break;
+      }
+      case 'wave': {
+        const waveX = (t - 0.5) * radius * 2;
+        const waveY = Math.sin(t * Math.PI * 3 + time * 0.8) * radius * 0.4;
+        const waveZ = Math.cos(t * Math.PI * 2) * radius * 0.3;
+        x = waveX;
+        y = waveY;
+        z = waveZ;
+        break;
+      }
+      case 'burst': {
+        const burstAngle = phi * i;
+        const burstY = 1 - t * 2;
+        const burstRadius = Math.sqrt(1 - burstY * burstY) * radius * (1 + Math.sin(time * 1.5 + i * 0.1) * 0.2);
+        x = Math.cos(burstAngle) * burstRadius;
+        y = burstY * radius;
+        z = Math.sin(burstAngle) * burstRadius;
+        break;
+      }
+    }
 
-        return (
-          <motion.div
-            key={i}
-            className={`absolute rounded-full ${
-              i % 3 === 0 ? 'bg-cyan-400' :
-              i % 3 === 1 ? 'bg-blue-400' : 'bg-white/70'
-            }`}
-            style={{
-              width: size,
-              height: size,
-              left: '50%',
-              top: '50%',
-            }}
-            animate={isActive ? {
-              x: [
-                Math.cos(angle) * distance,
-                Math.cos(angle + 0.5) * (distance + (isExcited ? 40 : 20)),
-                Math.cos(angle + 1) * distance,
-                Math.cos(angle) * distance,
-              ],
-              y: [
-                Math.sin(angle) * distance,
-                Math.sin(angle + 0.5) * (distance + (isExcited ? 40 : 20)),
-                Math.sin(angle + 1) * distance,
-                Math.sin(angle) * distance,
-              ],
-              opacity: [0.2, 0.8, 0.2],
-              scale: isExcited ? [1, 2, 1] : [1, 1.3, 1],
-            } : {
-              x: Math.cos(angle) * distance * 0.8,
-              y: Math.sin(angle) * distance * 0.8,
-              opacity: 0.15,
-              scale: 1,
-            }}
-            transition={{
-              duration: isExcited ? 1.5 : 4,
-              repeat: Infinity,
-              delay,
-              ease: "easeInOut",
-            }}
-          />
-        );
-      })}
-    </div>
-  );
+    points.push({ x, y, z });
+  }
+  return points;
 }
 
-// Audio visualization waves
-function AudioWaves({ isActive }: { isActive: boolean }) {
-  const waveCount = 4;
-
-  return (
-    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-      {Array.from({ length: waveCount }).map((_, i) => (
-        <motion.div
-          key={i}
-          className="absolute rounded-full border border-cyan-400/30"
-          style={{
-            width: 200 + i * 50,
-            height: 200 + i * 50,
-          }}
-          animate={isActive ? {
-            scale: [1, 1.2, 1],
-            opacity: [0.3, 0.1, 0.3],
-          } : {
-            scale: 1,
-            opacity: 0.1,
-          }}
-          transition={{
-            duration: 0.8,
-            repeat: Infinity,
-            delay: i * 0.2,
-            ease: "easeOut",
-          }}
-        />
-      ))}
-    </div>
-  );
+// Smooth easing function
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-// Main organic blob with mouse interaction
-function OrganicBlob({ mood = 'idle' }: { mood: AvatarMood }) {
-  const blobControls = useAnimation();
-  const coreControls = useAnimation();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [time, setTime] = useState(0);
-  const [isHovered, setIsHovered] = useState(false);
+// Orbiting particle system - uses refs to avoid resets
+function OrbitingParticles({
+  primaryColor,
+  moodIntensity
+}: {
+  primaryColor: string;
+  moodIntensity: number;
+}) {
+  const timeRef = useRef(0);
+  const [, forceUpdate] = useState(0);
+  const particleCount = 20;
 
-  // Mouse position for interaction
-  const mouseX = useMotionValue(0);
-  const mouseY = useMotionValue(0);
-
-  // Smooth spring values for blob distortion
-  const springConfig = { damping: 25, stiffness: 200 };
-  const blobX = useSpring(mouseX, springConfig);
-  const blobY = useSpring(mouseY, springConfig);
-
-  // Transform mouse position to rotation
-  const rotateX = useTransform(blobY, [-50, 50], [10, -10]);
-  const rotateY = useTransform(blobX, [-50, 50], [-10, 10]);
-
-  const isSpeaking = mood === 'speaking';
-  const isThinking = mood === 'thinking';
-  const isExcited = mood === 'excited';
-
-  // Continuous morphing animation
   useEffect(() => {
     let animationId: number;
     const animate = () => {
-      setTime(Date.now());
+      timeRef.current += 0.004; // Very slow
+      forceUpdate(n => n + 1);
       animationId = requestAnimationFrame(animate);
     };
     animationId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(animationId);
   }, []);
 
-  // Mouse move handler
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
-    mouseX.set((e.clientX - centerX) * 0.3);
-    mouseY.set((e.clientY - centerY) * 0.3);
-  }, [mouseX, mouseY]);
-
-  const handleMouseLeave = useCallback(() => {
-    mouseX.set(0);
-    mouseY.set(0);
-    setIsHovered(false);
-  }, [mouseX, mouseY]);
-
-  // Generate current blob path with time-based morphing
-  const complexity = isExcited ? 6 : isThinking ? 12 : isSpeaking ? 10 : 8;
-  const variance = isExcited ? 35 : isThinking ? 25 : isSpeaking ? 28 : 18;
-  const phase = isExcited ? Math.PI : isThinking ? Math.PI / 4 : isSpeaking ? Math.PI / 2 : 0;
-  const currentPath = useMemo(() =>
-    generateBlobPath(complexity, variance + (isHovered ? 8 : 0), phase, time),
-    [complexity, variance, phase, time, isHovered]
-  );
-
-  useEffect(() => {
-    if (isThinking) {
-      blobControls.start({
-        rotate: [0, 360],
-        scale: [1, 1.05, 0.95, 1],
-        transition: { rotate: { duration: 8, repeat: Infinity, ease: "linear" }, scale: { duration: 2, repeat: Infinity } }
-      });
-      coreControls.start({
-        scale: [1, 0.8, 1],
-        opacity: [0.8, 1, 0.8],
-        transition: { duration: 1.5, repeat: Infinity }
-      });
-    } else if (isSpeaking) {
-      blobControls.start({
-        scale: [1, 1.08, 0.95, 1.05, 1],
-        rotate: 0,
-        transition: { duration: 0.6, repeat: Infinity }
-      });
-      coreControls.start({
-        scale: [1, 1.4, 1],
-        opacity: 1,
-        transition: { duration: 0.25, repeat: Infinity }
-      });
-    } else if (isExcited) {
-      blobControls.start({
-        scale: [1, 1.15, 1],
-        rotate: [0, 10, -10, 0],
-        transition: { duration: 0.8, repeat: Infinity }
-      });
-      coreControls.start({
-        scale: [1, 1.5, 1],
-        opacity: 1,
-        transition: { duration: 0.5, repeat: Infinity }
-      });
-    } else {
-      blobControls.start({
-        scale: 1,
-        rotate: 0,
-        transition: { duration: 1 }
-      });
-      coreControls.start({
-        scale: 1,
-        opacity: 0.7,
-        transition: { duration: 1 }
-      });
-    }
-  }, [mood, blobControls, coreControls, isSpeaking, isThinking, isExcited]);
-
-  // Blue/cyan palette - modern AI aesthetic
-  const gradientColors = isExcited
-    ? ['#a78bfa', '#7c3aed']  // violet when excited
-    : isThinking
-    ? ['#60a5fa', '#2563eb']  // blue when thinking
-    : isSpeaking
-    ? ['#22d3ee', '#06b6d4']  // cyan when speaking
-    : ['#38bdf8', '#0ea5e9']; // sky blue idle
-
-  const glowColor = isExcited ? 'rgba(167,139,250,0.5)' :
-                    isSpeaking ? 'rgba(34,211,238,0.5)' :
-                    isThinking ? 'rgba(96,165,250,0.4)' :
-                    'rgba(56,189,248,0.35)';
+  const time = timeRef.current;
 
   return (
-    <motion.div
-      ref={containerRef}
-      className="relative w-[280px] h-[280px] cursor-pointer"
-      onMouseMove={handleMouseMove}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={handleMouseLeave}
-      animate={{ y: [0, -12, 0] }}
-      transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-      style={{
-        perspective: 800,
-      }}
-    >
-      {/* Glow effect - larger and more dynamic */}
-      <motion.div
-        className="absolute inset-[-20%] blur-3xl"
-        style={{
-          background: `radial-gradient(circle, ${glowColor} 0%, transparent 70%)`,
-        }}
-        animate={{
-          scale: isSpeaking ? [1, 1.4, 1] : isHovered ? [1, 1.2, 1] : [1, 1.15, 1],
-          opacity: isSpeaking ? [0.6, 1, 0.6] : [0.5, 0.8, 0.5],
-        }}
-        transition={{ duration: isSpeaking ? 0.4 : 2, repeat: Infinity }}
-      />
+    <svg className="absolute inset-0 w-full h-full overflow-visible" viewBox="-150 -150 300 300">
+      {Array.from({ length: particleCount }).map((_, i) => {
+        const baseAngle = (i / particleCount) * Math.PI * 2;
+        const orbitRadius = 85 + (i % 3) * 18;
+        const orbitSpeed = 0.15 + (i % 4) * 0.05; // Slower orbits
+        const verticalOffset = Math.sin(i * 1.5) * 25;
+        const tiltX = Math.sin(i * 0.7) * 0.25;
 
-      {/* Main blob SVG with 3D rotation on hover */}
-      <motion.svg
-        viewBox="0 0 200 200"
-        className="w-full h-full"
-        animate={blobControls}
-        style={{
-          rotateX,
-          rotateY,
-          transformStyle: 'preserve-3d',
-        }}
-      >
+        const angle = baseAngle + time * orbitSpeed;
+        const x = Math.cos(angle) * orbitRadius;
+        const baseY = Math.sin(angle) * orbitRadius * tiltX + verticalOffset;
+        const z = Math.sin(angle) * orbitRadius;
+
+        const waveAmplitude = moodIntensity * 12;
+        const y = baseY + Math.sin(time * 0.8 + i * 0.3) * waveAmplitude;
+
+        const scale = 200 / (200 + z);
+        const projX = x * scale;
+        const projY = y * scale;
+
+        const size = (1.5 + (i % 3) + moodIntensity * 1.5) * scale;
+        const opacity = 0.2 + moodIntensity * 0.3 + Math.sin(time * 0.5 + i * 0.2) * 0.1;
+
+        return (
+          <g key={i}>
+            <line
+              x1={0}
+              y1={0}
+              x2={projX}
+              y2={projY}
+              stroke={primaryColor}
+              strokeWidth={0.2}
+              opacity={opacity * 0.15}
+            />
+            <circle
+              cx={projX}
+              cy={projY}
+              r={size}
+              fill={i % 5 === 0 ? '#fff' : primaryColor}
+              opacity={opacity}
+            />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// Main Point Cloud Entity - persistent animation state
+function PointCloudEntity({
+  mood,
+  moodIntensity,
+  targetShape,
+  morphProgress,
+  currentShapeRef
+}: {
+  mood: AvatarMood;
+  moodIntensity: number;
+  targetShape: ShapeType;
+  morphProgress: number;
+  currentShapeRef: React.MutableRefObject<ShapeType>;
+}) {
+  // Persistent animation state in refs - never resets
+  const timeRef = useRef(0);
+  const rotationRef = useRef(0);
+  const [, forceUpdate] = useState(0);
+
+  const pointCount = 50;
+  const radius = 50;
+
+  // Continuous animation loop - constant speed, no mood dependency
+  useEffect(() => {
+    let animationId: number;
+    let lastTime = Date.now();
+
+    const animate = () => {
+      const now = Date.now();
+      const delta = (now - lastTime) / 1000;
+      lastTime = now;
+
+      // Constant slow progression
+      timeRef.current += delta * 0.3;
+
+      // Constant slow rotation
+      rotationRef.current += delta * 0.04;
+
+      forceUpdate(n => n + 1);
+      animationId = requestAnimationFrame(animate);
+    };
+
+    animationId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationId);
+  }, []);
+
+  const time = timeRef.current;
+  const rotationY = rotationRef.current;
+
+  // Generate and interpolate points with smooth morphing
+  const projectedPoints = useMemo(() => {
+    const currentShape = currentShapeRef.current;
+    const fromPoints = generateShapePoints(currentShape, pointCount, radius, time);
+    const toPoints = generateShapePoints(targetShape, pointCount, radius, time);
+
+    // Smooth easing for morph
+    const easedProgress = easeInOutCubic(morphProgress);
+
+    const cosY = Math.cos(rotationY);
+    const sinY = Math.sin(rotationY);
+
+    return fromPoints.map((from, i) => {
+      const to = toPoints[i];
+
+      // Interpolate position
+      const px = from.x + (to.x - from.x) * easedProgress;
+      const py = from.y + (to.y - from.y) * easedProgress;
+      const pz = from.z + (to.z - from.z) * easedProgress;
+
+      // Add subtle organic movement
+      const breathe = Math.sin(time * 0.4 + i * 0.12) * (3 + moodIntensity * 5);
+
+      // Rotate around Y axis
+      const x = (px + Math.sin(time * 0.5 + i * 0.08) * breathe * 0.08) * cosY - pz * sinY;
+      const z = px * sinY + pz * cosY;
+      const y = py + Math.cos(time * 0.35 + i * 0.08) * breathe * 0.08;
+
+      // Perspective projection
+      const scale = 200 / (200 + z);
+      const projX = x * scale + 100;
+      const projY = y * scale + 100;
+
+      return {
+        x: projX,
+        y: projY,
+        z,
+        scale,
+        opacity: Math.max(0.25, Math.min(1, (z + radius) / (radius * 2))),
+      };
+    });
+  }, [time, rotationY, targetShape, morphProgress, currentShapeRef, moodIntensity, pointCount, radius]);
+
+  // Generate connections
+  const connections = useMemo(() => {
+    const conns: Array<{ from: number; to: number }> = [];
+    const maxDist = 40 + moodIntensity * 15;
+
+    for (let i = 0; i < projectedPoints.length; i++) {
+      for (let j = i + 1; j < projectedPoints.length; j++) {
+        const dx = projectedPoints[i].x - projectedPoints[j].x;
+        const dy = projectedPoints[i].y - projectedPoints[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < maxDist) {
+          conns.push({ from: i, to: j });
+        }
+      }
+    }
+    return conns;
+  }, [projectedPoints, moodIntensity]);
+
+  // Smoothly interpolated colors
+  const primaryColor = mood === 'excited' ? '#a78bfa' :
+                       mood === 'thinking' ? '#60a5fa' :
+                       mood === 'speaking' ? '#22d3ee' : '#38bdf8';
+  const secondaryColor = mood === 'excited' ? '#7c3aed' :
+                         mood === 'thinking' ? '#2563eb' :
+                         mood === 'speaking' ? '#06b6d4' : '#0ea5e9';
+
+  return (
+    <div className="relative w-[200px] h-[200px]">
+      <svg viewBox="0 0 200 200" className="w-full h-full overflow-visible">
         <defs>
-          <linearGradient id="blobGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <motion.stop
-              offset="0%"
-              stopOpacity="0.9"
-              animate={{ stopColor: gradientColors[0] }}
-              transition={{ duration: 0.5 }}
-            />
-            <motion.stop
-              offset="100%"
-              stopOpacity="0.7"
-              animate={{ stopColor: gradientColors[1] }}
-              transition={{ duration: 0.5 }}
-            />
-          </linearGradient>
-          <radialGradient id="coreGradient" cx="30%" cy="30%">
-            <stop offset="0%" stopColor="#fff" stopOpacity="0.8" />
-            <stop offset="50%" stopColor={gradientColors[0]} stopOpacity="0.9" />
-            <stop offset="100%" stopColor={gradientColors[1]} stopOpacity="1" />
+          <radialGradient id="coreGlow3" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stopColor={primaryColor} stopOpacity="0.9" />
+            <stop offset="50%" stopColor={secondaryColor} stopOpacity="0.3" />
+            <stop offset="100%" stopColor={secondaryColor} stopOpacity="0" />
           </radialGradient>
-          <filter id="glow">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="innerGlow">
+          <filter id="glow3" x="-100%" y="-100%" width="300%" height="300%">
             <feGaussianBlur stdDeviation="2" result="blur" />
             <feMerge>
               <feMergeNode in="blur" />
@@ -325,143 +287,230 @@ function OrganicBlob({ mood = 'idle' }: { mood: AvatarMood }) {
           </filter>
         </defs>
 
-        {/* Outer glow ring */}
-        <motion.circle
+        {/* Core glow */}
+        <circle
           cx="100"
           cy="100"
-          fill="none"
-          stroke={gradientColors[0]}
-          strokeWidth="0.5"
-          strokeOpacity={isHovered ? 0.4 : 0.2}
-          initial={{ r: 95 }}
-          animate={{
-            r: isHovered ? [95, 98, 95] : 95,
-          }}
-          transition={{ duration: 1.5, repeat: Infinity }}
+          r={22 + moodIntensity * 8 + Math.sin(time * 0.5) * 3}
+          fill="url(#coreGlow3)"
+          opacity={0.4 + moodIntensity * 0.25}
         />
 
-        {/* Main blob shape - continuously morphing */}
-        <motion.path
-          d={currentPath}
-          fill="url(#blobGradient)"
-          filter="url(#glow)"
-          style={{
-            transformOrigin: 'center',
-          }}
-        />
+        {/* Connection lines */}
+        <g>
+          {connections.map((conn, i) => {
+            const from = projectedPoints[conn.from];
+            const to = projectedPoints[conn.to];
+            const avgOpacity = (from.opacity + to.opacity) / 2;
+            const pulseOpacity = 0.08 + Math.sin(time * 0.6 + i * 0.03) * 0.08 + moodIntensity * 0.15;
 
-        {/* Inner highlight blob */}
-        <motion.ellipse
-          cx="85"
-          cy="85"
-          fill="white"
-          fillOpacity={0.15}
-          initial={{ rx: 25, ry: 20 }}
-          animate={{
-            rx: [25, 28, 25],
-            ry: [20, 22, 20],
-          }}
-          transition={{ duration: 3, repeat: Infinity }}
-        />
+            return (
+              <line
+                key={`conn-${i}`}
+                x1={from.x}
+                y1={from.y}
+                x2={to.x}
+                y2={to.y}
+                stroke={primaryColor}
+                strokeWidth={0.4 + moodIntensity * 0.3}
+                opacity={avgOpacity * pulseOpacity}
+              />
+            );
+          })}
+        </g>
 
-        {/* Inner structure ring */}
-        <motion.circle
+        {/* Points */}
+        {projectedPoints.map((point, i) => {
+          const baseSize = 1.2 + point.scale * 1.2;
+          const pulseSize = baseSize * (1 + Math.sin(time * 0.6 + i * 0.08) * 0.12 * moodIntensity);
+
+          return (
+            <circle
+              key={`point-${i}`}
+              cx={point.x}
+              cy={point.y}
+              r={pulseSize}
+              fill={i % 7 === 0 ? '#fff' : primaryColor}
+              opacity={point.opacity * (0.4 + moodIntensity * 0.35)}
+              filter={i % 7 === 0 ? 'url(#glow3)' : undefined}
+            />
+          );
+        })}
+
+        {/* Central core */}
+        <circle
           cx="100"
           cy="100"
-          fill="none"
-          stroke={gradientColors[0]}
-          strokeWidth="1.5"
-          strokeOpacity={0.3}
-          strokeDasharray="8 4"
-          initial={{ r: 50 }}
-          animate={{
-            rotate: isThinking ? 360 : isHovered ? 180 : 0,
-            r: isSpeaking ? [50, 55, 50] : 50,
-          }}
-          transition={{
-            rotate: { duration: isThinking ? 4 : 20, repeat: Infinity, ease: "linear" },
-            r: { duration: 0.3, repeat: Infinity }
-          }}
-          style={{ transformOrigin: 'center' }}
+          r={5 + moodIntensity * 3 + Math.sin(time * 0.7) * 1.5}
+          fill={primaryColor}
+          filter="url(#glow3)"
+          opacity={0.85}
         />
 
-        {/* Secondary inner ring */}
-        <motion.circle
-          cx="100"
-          cy="100"
-          r="35"
-          fill="none"
-          stroke={gradientColors[1]}
-          strokeWidth="1"
-          strokeOpacity={0.2}
-          strokeDasharray="4 6"
-          animate={{
-            rotate: isThinking ? -360 : isHovered ? -90 : 0,
-          }}
-          transition={{
-            rotate: { duration: isThinking ? 6 : 30, repeat: Infinity, ease: "linear" },
-          }}
-          style={{ transformOrigin: 'center' }}
+        {/* Inner highlight */}
+        <circle
+          cx="98"
+          cy="98"
+          r="1.5"
+          fill="#fff"
+          opacity={0.65}
         />
-
-        {/* Core - pulsing center */}
-        <motion.circle
-          cx="100"
-          cy="100"
-          r={isSpeaking ? 24 : 20}
-          fill="url(#coreGradient)"
-          filter="url(#innerGlow)"
-          animate={coreControls}
-          style={{
-            filter: `drop-shadow(0 0 ${isSpeaking ? '25px' : isHovered ? '18px' : '12px'} ${gradientColors[0]})`,
-          }}
-        />
-
-        {/* Core inner highlight */}
-        <motion.circle
-          cx="94"
-          cy="94"
-          r="8"
-          fill="white"
-          fillOpacity={0.4}
-          animate={{
-            fillOpacity: isSpeaking ? [0.4, 0.7, 0.4] : [0.3, 0.5, 0.3],
-          }}
-          transition={{ duration: isSpeaking ? 0.3 : 2, repeat: Infinity }}
-        />
-      </motion.svg>
-
-      {/* Audio waves when speaking - larger */}
-      {isSpeaking && <AudioWaves isActive={true} />}
-
-      {/* Processing indicator when thinking */}
-      {isThinking && (
-        <motion.div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 border-2 border-blue-400/50 rounded-full border-t-transparent"
-          animate={{ rotate: 360 }}
-          transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-        />
-      )}
-
-      {/* Hover ripple effect */}
-      {isHovered && (
-        <motion.div
-          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-400/30"
-          initial={{ width: 100, height: 100, opacity: 0.5 }}
-          animate={{
-            width: [100, 300],
-            height: [100, 300],
-            opacity: [0.5, 0],
-          }}
-          transition={{ duration: 1.5, repeat: Infinity }}
-        />
-      )}
-    </motion.div>
+      </svg>
+    </div>
   );
 }
 
+// Main exported component
 export function AvatarFull() {
   const mood = useUIPhaseStore((s) => s.avatarMood) || 'idle';
+  const messages = useChatStore((s) => s.messages);
+  const hasMessages = messages.length > 0;
+
+  // Refs for persistent state that shouldn't reset
+  const currentShapeRef = useRef<ShapeType>('sphere');
+  const morphProgressRef = useRef(0);
+  const lastMoodRef = useRef<AvatarMood>(mood);
+  const positionPhaseRef = useRef(0);
+  const lastPositionChangeRef = useRef(Date.now());
+
+  // Morph progress as motion value for smooth interpolation
+  const morphProgressMotion = useMotionValue(0);
+  const smoothMorphProgress = useSpring(morphProgressMotion, {
+    damping: 15,
+    stiffness: 20,
+    mass: 1.5
+  });
+
+  // Mood intensity with very slow spring
+  const rawMoodIntensity = mood === 'idle' ? 0.1 : mood === 'thinking' ? 0.5 : mood === 'speaking' ? 0.7 : 0.9;
+  const moodIntensityMotion = useMotionValue(rawMoodIntensity);
+  const moodIntensity = useSpring(moodIntensityMotion, {
+    damping: 12,
+    stiffness: 15,
+    mass: 2
+  });
+
+  // Position with springs for smooth but noticeable movement
+  const posX = useMotionValue(0);
+  const posY = useMotionValue(0);
+  const springX = useSpring(posX, { damping: 20, stiffness: 15, mass: 2 });
+  const springY = useSpring(posY, { damping: 20, stiffness: 15, mass: 2 });
+
+  // Target shape based on mood
+  const targetShape: ShapeType = useMemo(() => {
+    switch (mood) {
+      case 'thinking': return 'helix';
+      case 'speaking': return 'wave';
+      case 'excited': return 'burst';
+      default: return 'sphere';
+    }
+  }, [mood]);
+
+  // Handle mood changes - start morph transition
+  useEffect(() => {
+    if (mood !== lastMoodRef.current) {
+      // Mood changed - start morphing to new shape
+      lastMoodRef.current = mood;
+      currentShapeRef.current = targetShape === 'sphere' ?
+        (morphProgressRef.current > 0.5 ? currentShapeRef.current : 'sphere') :
+        currentShapeRef.current;
+      morphProgressRef.current = 0;
+      morphProgressMotion.set(0);
+    }
+    moodIntensityMotion.set(rawMoodIntensity);
+  }, [mood, rawMoodIntensity, moodIntensityMotion, targetShape, morphProgressMotion]);
+
+  // Continuous morph animation
+  useEffect(() => {
+    let animationId: number;
+
+    const animate = () => {
+      // Very slow morph progression
+      if (morphProgressRef.current < 1) {
+        morphProgressRef.current = Math.min(1, morphProgressRef.current + 0.003);
+        morphProgressMotion.set(morphProgressRef.current);
+      } else if (currentShapeRef.current !== targetShape) {
+        // Morph complete, update current shape
+        currentShapeRef.current = targetShape;
+      }
+
+      animationId = requestAnimationFrame(animate);
+    };
+
+    animationId = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animationId);
+  }, [targetShape, morphProgressMotion]);
+
+  // Position movement - noticeable wandering and floating
+  useEffect(() => {
+    let animationId: number;
+
+    const updatePosition = () => {
+      const now = Date.now();
+      const elapsed = (now - lastPositionChangeRef.current) / 1000;
+
+      // Change position target every 6-12 seconds
+      if (elapsed > 6 + Math.random() * 6) {
+        positionPhaseRef.current = (positionPhaseRef.current + 1) % 8;
+        lastPositionChangeRef.current = now;
+      }
+
+      // Much larger movement range
+      const moveRange = hasMessages ? 60 : 100;
+      const phase = positionPhaseRef.current;
+
+      // More positions for variety
+      const positions = [
+        { x: 0, y: 0 },
+        { x: moveRange * 0.8, y: -moveRange * 0.4 },
+        { x: -moveRange * 0.6, y: moveRange * 0.5 },
+        { x: moveRange * 0.4, y: moveRange * 0.6 },
+        { x: -moveRange * 0.9, y: -moveRange * 0.3 },
+        { x: moveRange * 0.5, y: -moveRange * 0.7 },
+        { x: -moveRange * 0.3, y: moveRange * 0.8 },
+        { x: moveRange * 0.7, y: moveRange * 0.2 },
+      ];
+
+      const target = positions[phase];
+
+      // Strong floating motion overlay
+      const time = now / 1000;
+      const floatX = Math.sin(time * 0.25) * 25 + Math.sin(time * 0.13) * 15 + Math.sin(time * 0.07) * 8;
+      const floatY = Math.cos(time * 0.2) * 20 + Math.cos(time * 0.11) * 12 + Math.cos(time * 0.05) * 6;
+
+      posX.set(target.x + floatX);
+      posY.set(target.y + floatY);
+
+      animationId = requestAnimationFrame(updatePosition);
+    };
+
+    animationId = requestAnimationFrame(updatePosition);
+    return () => cancelAnimationFrame(animationId);
+  }, [posX, posY, hasMessages]);
+
+  // Subscribe to spring values for child components
+  const [currentMorphProgress, setCurrentMorphProgress] = useState(0);
+  const [currentIntensity, setCurrentIntensity] = useState(0.1);
+
+  useEffect(() => {
+    const unsubMorph = smoothMorphProgress.on('change', setCurrentMorphProgress);
+    const unsubIntensity = moodIntensity.on('change', setCurrentIntensity);
+    return () => {
+      unsubMorph();
+      unsubIntensity();
+    };
+  }, [smoothMorphProgress, moodIntensity]);
+
+  // Colors
+  const primaryColor = mood === 'excited' ? '#a78bfa' :
+                       mood === 'speaking' ? '#22d3ee' :
+                       mood === 'thinking' ? '#60a5fa' : '#38bdf8';
+
+  const statusColor = primaryColor;
+  const statusText = mood === 'speaking' ? 'TRANSMITTING' :
+                     mood === 'thinking' ? 'PROCESSING' :
+                     mood === 'excited' ? 'READY' :
+                     'LISTENING';
 
   return (
     <motion.div
@@ -469,37 +518,70 @@ export function AvatarFull() {
       className="relative flex flex-col items-center"
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.6, ease: "easeOut" }}
+      transition={{ duration: 1.5, ease: [0.22, 1, 0.36, 1] }}
+      style={{ x: springX, y: springY }}
     >
-      {/* Flowing particles */}
-      <FlowingParticles mood={mood} />
-
-      {/* Main organic blob */}
-      <OrganicBlob mood={mood} />
-
-      {/* Status text - minimal */}
+      {/* Ambient glow - constant slow animation, no mood dependency */}
       <motion.div
-        className="mt-4 text-center"
+        className="absolute inset-[-60%] rounded-full blur-3xl pointer-events-none"
+        style={{
+          background: `radial-gradient(circle, ${statusColor}20 0%, transparent 70%)`,
+        }}
+        animate={{
+          scale: [1, 1.1, 1],
+          opacity: [0.25, 0.4, 0.25],
+        }}
+        transition={{
+          duration: 6,
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+      />
+
+      {/* Orbiting particles */}
+      <div className="absolute inset-[-50px] pointer-events-none">
+        <OrbitingParticles primaryColor={primaryColor} moodIntensity={currentIntensity} />
+      </div>
+
+      {/* Main point cloud entity */}
+      <PointCloudEntity
+        mood={mood}
+        moodIntensity={currentIntensity}
+        targetShape={targetShape}
+        morphProgress={currentMorphProgress}
+        currentShapeRef={currentShapeRef}
+      />
+
+      {/* Status indicator - constant animation */}
+      <motion.div
+        className="mt-6 text-center"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ delay: 0.3 }}
+        transition={{ delay: 1, duration: 1 }}
       >
-        <motion.span
-          className="text-xs font-mono tracking-widest uppercase"
-          style={{
-            color: mood === 'excited' ? '#a78bfa' :
-                   mood === 'speaking' ? '#22d3ee' :
-                   mood === 'thinking' ? '#60a5fa' :
-                   '#64748b'
-          }}
-          animate={{ opacity: [0.5, 1, 0.5] }}
-          transition={{ duration: 2, repeat: Infinity }}
-        >
-          {mood === 'speaking' ? '● TRANSMITTING' :
-           mood === 'thinking' ? '◐ PROCESSING' :
-           mood === 'excited' ? '★ READY' :
-           '○ LISTENING'}
-        </motion.span>
+        <motion.div className="flex items-center justify-center gap-2">
+          <motion.span
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: statusColor }}
+            animate={{
+              scale: [1, 1.2, 1],
+              opacity: [0.5, 0.8, 0.5],
+            }}
+            transition={{
+              duration: 2.5,
+              repeat: Infinity,
+              ease: "easeInOut",
+            }}
+          />
+          <motion.span
+            className="text-xs font-mono tracking-widest uppercase"
+            style={{ color: statusColor }}
+            animate={{ opacity: [0.5, 0.75, 0.5] }}
+            transition={{ duration: 4, repeat: Infinity }}
+          >
+            {statusText}
+          </motion.span>
+        </motion.div>
       </motion.div>
     </motion.div>
   );

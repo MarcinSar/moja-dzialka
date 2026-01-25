@@ -268,7 +268,7 @@ class HybridSearchService:
         results = []
         for i, r in enumerate(graph_results):
             result = SearchResult(
-                parcel_id=r.get("id", ""),
+                parcel_id=r.get("id_dzialki", ""),
                 rrf_score=1.0 / (i + 1),  # Simple rank-based score
                 sources=["graph"],
                 gmina=r.get("gmina"),
@@ -279,8 +279,8 @@ class HybridSearchService:
                 accessibility_score=r.get("accessibility_score"),
                 has_mpzp=r.get("has_mpzp"),
                 mpzp_symbol=r.get("mpzp_symbol"),
-                centroid_lat=r.get("lat"),
-                centroid_lon=r.get("lon"),
+                centroid_lat=r.get("centroid_lat"),
+                centroid_lon=r.get("centroid_lon"),
                 # Additional fields from graph
                 dist_to_forest=r.get("dist_to_forest"),
                 dist_to_water=r.get("dist_to_water"),

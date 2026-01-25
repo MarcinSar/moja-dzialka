@@ -102,6 +102,7 @@ class ParcelDetails(BaseModel):
 
     # Location
     gmina: Optional[str] = None
+    dzielnica: Optional[str] = None
     miejscowosc: Optional[str] = None
     centroid_lat: Optional[float] = None
     centroid_lon: Optional[float] = None
@@ -123,23 +124,44 @@ class ParcelDetails(BaseModel):
     dist_to_public_road: Optional[float] = None
     dist_to_forest: Optional[float] = None
     dist_to_water: Optional[float] = None
+    dist_to_pharmacy: Optional[float] = None
 
     # Buffer stats
     pct_forest_500m: Optional[float] = None
     pct_water_500m: Optional[float] = None
     count_buildings_500m: Optional[int] = None
 
-    # MPZP
-    has_mpzp: Optional[bool] = None
-    mpzp_symbol: Optional[str] = None
-    mpzp_przeznaczenie: Optional[str] = None
-    mpzp_budowlane: Optional[bool] = None
+    # POG (Plan Ogólny Gminy) - all fields
+    has_pog: Optional[bool] = None
+    pog_symbol: Optional[str] = None
+    pog_nazwa: Optional[str] = None
+    pog_oznaczenie: Optional[str] = None
+    pog_profil_podstawowy: Optional[str] = None
+    pog_profil_podstawowy_nazwy: Optional[str] = None
+    pog_profil_dodatkowy: Optional[str] = None
+    pog_profil_dodatkowy_nazwy: Optional[str] = None
+    pog_maks_intensywnosc: Optional[float] = None
+    pog_maks_wysokosc_m: Optional[float] = None
+    pog_maks_zabudowa_pct: Optional[float] = None
+    pog_min_bio_pct: Optional[float] = None
+    is_residential_zone: Optional[bool] = None
 
     # Composite scores
     quietness_score: Optional[float] = None
     nature_score: Optional[float] = None
     accessibility_score: Optional[float] = None
     has_public_road_access: Optional[bool] = None
+
+    # Building info
+    is_built: Optional[bool] = None
+    building_count: Optional[int] = None
+    building_coverage_pct: Optional[float] = None
+
+    # Categories
+    kategoria_ciszy: Optional[str] = None
+    kategoria_natury: Optional[str] = None
+    kategoria_dostepu: Optional[str] = None
+    gestosc_zabudowy: Optional[str] = None
 
     # Geometry (WGS84 for frontend)
     geometry_wgs84: Optional[Dict[str, Any]] = None
@@ -159,8 +181,8 @@ class MapDataRequest(BaseModel):
 class MapDataResponse(BaseModel):
     """GeoJSON data for map visualization."""
     geojson: Dict[str, Any]
-    bounds: Optional[Dict[str, float]] = None
-    center: Optional[Dict[str, float]] = None
+    bounds: Optional[List[List[float]]] = None  # [[min_lat, min_lon], [max_lat, max_lon]]
+    center: Optional[List[float]] = None  # [lat, lon]
     parcel_count: int
 
 
@@ -211,6 +233,26 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     code: Optional[str] = None
+
+
+# =============================================================================
+# LEADS
+# =============================================================================
+
+class LeadSubmission(BaseModel):
+    """Lead submission for a parcel."""
+    parcel_id: str
+    name: str
+    email: str  # EmailStr not needed here, validation in router
+    phone: Optional[str] = None
+    interests: List[str] = []
+
+
+class LeadResponse(BaseModel):
+    """Response after lead submission."""
+    success: bool
+    message: str
+    lead_id: Optional[str] = None
 
 
 # =============================================================================

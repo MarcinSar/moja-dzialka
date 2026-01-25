@@ -139,6 +139,19 @@ class ToolExecutor:
             elif tool_name == "get_parcel_full_context":
                 result = await self._get_parcel_full_context(params)
                 return result, {}
+            # Dynamic location tools (2026-01-25)
+            elif tool_name == "get_available_locations":
+                result = await self._get_available_locations(params)
+                return result, {}
+            elif tool_name == "get_districts_in_miejscowosc":
+                result = await self._get_districts_in_miejscowosc(params)
+                return result, {}
+            elif tool_name == "resolve_location":
+                result = await self._resolve_location(params)
+                return result, {}
+            elif tool_name == "validate_location_combination":
+                result = await self._validate_location_combination(params)
+                return result, {}
             else:
                 return {"error": f"Unknown tool: {tool_name}"}, {}
 
@@ -159,8 +172,7 @@ class ToolExecutor:
 
         # Smart location parsing
         try:
-            gminy = await graph_service.get_gminy()
-            gminy_names = [g.name for g in gminy]
+            gminy_names = await graph_service.get_all_gminy()
             gminy_lower = {g.lower(): g for g in gminy_names}
 
             # Fix: if miejscowosc is actually a gmina name, move it to gmina
@@ -191,13 +203,23 @@ class ToolExecutor:
                             gmina_param = gmina_name
                             break
 
-                # Try miejscowość (dzielnica) only if no gmina match
-                if not miejscowosc_param and not gmina_param:
-                    miejscowosci = await spatial_service.get_miejscowosci()
-                    for m in miejscowosci:
-                        if m.lower() == clean_loc:
-                            miejscowosc_param = m
-                            break
+                # Try dzielnica (district) - use resolve_location for full resolution
+                # FIXED 2026-01-25: Use resolve_location to find district AND its parent gmina
+                if not miejscowosc_param:
+                    # Use resolve_location which searches ALL districts in ALL cities
+                    resolved = await graph_service.resolve_location(location_desc)
+                    if resolved.get("resolved"):
+                        # Found a match - could be a city or a district
+                        if resolved.get("dzielnica"):
+                            # It's a district - set both dzielnica and its parent gmina
+                            miejscowosc_param = resolved["dzielnica"]
+                            if not gmina_param and resolved.get("gmina"):
+                                gmina_param = resolved["gmina"]
+                            logger.info(f"Resolved '{location_desc}' to district: {miejscowosc_param} in {gmina_param}")
+                        elif resolved.get("miejscowosc") and not gmina_param:
+                            # It's a city/miejscowość - set as gmina (in MVP gmina=miejscowość)
+                            gmina_param = resolved["miejscowosc"]
+                            logger.info(f"Resolved '{location_desc}' to city/gmina: {gmina_param}")
 
                 # Try powiat as last resort
                 if not powiat_param and not gmina_param and not miejscowosc_param:
@@ -219,8 +241,9 @@ class ToolExecutor:
             "lat": params.get("lat"),
             "lon": params.get("lon"),
             "radius_m": params.get("radius_m", 5000),
-            "min_area_m2": params.get("min_area_m2", 500),
-            "max_area_m2": params.get("max_area_m2", 3000),
+            # CHANGED 2026-01-25: No default area filters! Only use what user explicitly provided
+            "min_area_m2": params.get("min_area_m2"),  # None if not provided
+            "max_area_m2": params.get("max_area_m2"),  # None if not provided
             "area_category": params.get("area_category"),
             "quietness_categories": params.get("quietness_categories"),
             "building_density": params.get("building_density"),
@@ -256,7 +279,11 @@ class ToolExecutor:
         if preferences.get("lat") and preferences.get("lon"):
             radius = preferences.get("radius_m", 5000)
             summary["wyszukiwanie_przestrzenne"] = f"w promieniu {radius/1000:.1f}km od punktu"
-        summary["powierzchnia"] = f"{preferences['min_area_m2']}-{preferences['max_area_m2']} m²"
+        # CHANGED 2026-01-25: Only show area if explicitly provided
+        if preferences.get("min_area_m2") or preferences.get("max_area_m2"):
+            min_a = preferences.get("min_area_m2", 0)
+            max_a = preferences.get("max_area_m2", "∞")
+            summary["powierzchnia"] = f"{min_a}-{max_a} m²"
 
         # Environment preferences
         env_prefs = []
@@ -431,13 +458,16 @@ class ToolExecutor:
                         "search_state.search_executed": True,
                         "search_state.results_shown": len(fallback_results),
                         "search_state.search_iteration": iteration,
+                        "search_state.parcel_index_map": fallback_info.get("parcel_index_map", {}),
                     }
 
                     return result, state_updates
 
         current_results = []
-        for r in results:
+        parcel_index_map = {}
+        for idx, r in enumerate(results, 1):
             parcel_dict = {
+                "index": idx,  # Position number for user reference
                 "id": r.parcel_id,
                 "gmina": r.gmina,
                 "miejscowosc": r.miejscowosc,
@@ -459,6 +489,7 @@ class ToolExecutor:
             parcel_dict["highlights"] = self._generate_highlights(parcel_dict, prefs)
             parcel_dict["explanation"] = self._generate_explanation(parcel_dict)
             current_results.append(parcel_dict)
+            parcel_index_map[idx] = r.parcel_id
 
         iteration = self._search_state.search_iteration + 1
 
@@ -480,6 +511,7 @@ class ToolExecutor:
             "search_state.search_executed": True,
             "search_state.results_shown": len(current_results),
             "search_state.search_iteration": iteration,
+            "search_state.parcel_index_map": parcel_index_map,
         }
 
         return result, state_updates
@@ -709,10 +741,12 @@ class ToolExecutor:
             "results_count": len(results),
         }
 
-        # Convert results to dicts
+        # Convert results to dicts with indexes
         result_dicts = []
-        for r in results:
+        index_map = {}
+        for idx, r in enumerate(results, 1):
             parcel_dict = {
+                "index": idx,
                 "id": r.parcel_id,
                 "gmina": r.gmina,
                 "miejscowosc": r.miejscowosc,
@@ -734,7 +768,9 @@ class ToolExecutor:
             parcel_dict["highlights"] = self._generate_highlights(parcel_dict, new_prefs)
             parcel_dict["explanation"] = self._generate_explanation(parcel_dict)
             result_dicts.append(parcel_dict)
+            index_map[idx] = r.parcel_id
 
+        fallback_info["parcel_index_map"] = index_map
         return result_dicts, fallback_info
 
     async def _critique_search_results(self, params: Dict[str, Any]) -> ToolResult:
@@ -781,8 +817,9 @@ class ToolExecutor:
         prefs = approved.copy()
         adjustment_lower = adjustment.lower()
 
-        min_area = prefs.get("min_area_m2", 500)
-        max_area = prefs.get("max_area_m2", 3000)
+        # CHANGED 2026-01-25: Don't assume default area values
+        min_area = prefs.get("min_area_m2") or 0
+        max_area = prefs.get("max_area_m2") or 10000
 
         # Area adjustments
         if "większ" in adjustment_lower or "duż" in adjustment_lower:
@@ -843,6 +880,56 @@ class ToolExecutor:
     # =========================================================================
     # HELPER METHODS
     # =========================================================================
+
+    def _resolve_parcel_reference(self, ref: str) -> Optional[str]:
+        """Resolve a parcel reference to actual parcel ID.
+
+        Accepts:
+        - Numeric string: "1", "2", "3" → looks up in parcel_index_map
+        - Polish ordinal words: "pierwsza", "druga", "trzecia"
+        - Already a parcel ID (contains "_") → returns as-is
+
+        Args:
+            ref: User's parcel reference
+
+        Returns:
+            Actual parcel ID or None if not found
+        """
+        if not ref:
+            return None
+
+        ref = ref.strip()
+
+        # Already a parcel ID (contains underscore like "220611_2.0001.1234")
+        if "_" in ref:
+            return ref
+
+        # Polish ordinal words
+        ordinal_map = {
+            "pierwsza": 1, "pierwszą": 1, "pierwszy": 1, "1.": 1,
+            "druga": 2, "drugą": 2, "drugi": 2, "2.": 2,
+            "trzecia": 3, "trzecią": 3, "trzeci": 3, "3.": 3,
+            "czwarta": 4, "czwartą": 4, "czwarty": 4, "4.": 4,
+            "piąta": 5, "piątą": 5, "piąty": 5, "5.": 5,
+            "szósta": 6, "szóstą": 6, "szósty": 6, "6.": 6,
+            "siódma": 7, "siódmą": 7, "siódmy": 7, "7.": 7,
+            "ósma": 8, "ósmą": 8, "ósmy": 8, "8.": 8,
+            "dziewiąta": 9, "dziewiątą": 9, "dziewiąty": 9, "9.": 9,
+            "dziesiąta": 10, "dziesiątą": 10, "dziesiąty": 10, "10.": 10,
+        }
+
+        ref_lower = ref.lower()
+        if ref_lower in ordinal_map:
+            idx = ordinal_map[ref_lower]
+            return self._search_state.parcel_index_map.get(idx)
+
+        # Numeric string
+        if ref.isdigit():
+            idx = int(ref)
+            return self._search_state.parcel_index_map.get(idx)
+
+        # Not recognized - return as-is (might be a valid ID without underscore)
+        return ref
 
     def _generate_highlights(self, parcel: Dict[str, Any], prefs: Dict[str, Any]) -> List[str]:
         """Generate highlight strings explaining why this parcel matches preferences."""
@@ -929,13 +1016,19 @@ class ToolExecutor:
 
     async def _find_similar_parcels(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Find parcels similar to a reference parcel."""
-        parcel_id = params["parcel_id"]
+        raw_ref = params["parcel_id"]
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
+
         limit = params.get("limit", 5)
 
         results = await vector_service.search_similar(parcel_id=parcel_id, top_k=limit)
 
         return {
             "reference_parcel": parcel_id,
+            "resolved_from": raw_ref if raw_ref != parcel_id else None,
             "count": len(results),
             "similar_parcels": [
                 {
@@ -951,11 +1044,16 @@ class ToolExecutor:
 
     async def _get_parcel_details(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed info about a parcel."""
-        parcel_id = params["parcel_id"]
+        raw_ref = params["parcel_id"]
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
+
         details = await spatial_service.get_parcel_details(parcel_id, include_geometry=False)
 
         if details:
-            return {"parcel": details}
+            return {"parcel": details, "resolved_from": raw_ref if raw_ref != parcel_id else None}
         else:
             return {"error": f"Działka nie znaleziona: {parcel_id}"}
 
@@ -1121,7 +1219,12 @@ class ToolExecutor:
 
     async def _get_parcel_neighborhood(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get detailed neighborhood context for a parcel."""
-        parcel_id = params["parcel_id"]
+        raw_ref = params["parcel_id"]
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
+
         result = await graph_service.get_parcel_neighborhood(parcel_id)
 
         if "error" in result:
@@ -1379,10 +1482,20 @@ class ToolExecutor:
 
     async def _generate_map_data(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Generate GeoJSON for map display."""
-        parcel_ids = params["parcel_ids"]
+        raw_ids = params["parcel_ids"]
+
+        if not raw_ids:
+            return {"error": "No parcel IDs provided"}
+
+        # Resolve all references to actual IDs
+        parcel_ids = []
+        for raw_ref in raw_ids:
+            resolved = self._resolve_parcel_reference(str(raw_ref))
+            if resolved:
+                parcel_ids.append(resolved)
 
         if not parcel_ids:
-            return {"error": "No parcel IDs provided"}
+            return {"error": "Nie udało się rozwiązać żadnego ID działki"}
 
         parcels = await spatial_service.get_parcels_by_ids(parcel_ids, include_geometry=True)
 
@@ -1586,9 +1699,13 @@ class ToolExecutor:
 
     async def _get_water_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get information about water bodies near a parcel."""
-        parcel_id = params.get("parcel_id")
-        if not parcel_id:
+        raw_ref = params.get("parcel_id")
+        if not raw_ref:
             return {"error": "Podaj ID działki (parcel_id)"}
+
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
 
         result = await graph_service.get_water_near_parcel(parcel_id)
 
@@ -1599,9 +1716,13 @@ class ToolExecutor:
 
     async def _get_parcel_full_context(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get full context for a parcel including all features."""
-        parcel_id = params.get("parcel_id")
-        if not parcel_id:
+        raw_ref = params.get("parcel_id")
+        if not raw_ref:
             return {"error": "Podaj ID działki (parcel_id)"}
+
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano odniesienia do działki: {raw_ref}"}
 
         result = await graph_service.get_parcel_full_context(parcel_id)
 
@@ -1609,6 +1730,137 @@ class ToolExecutor:
             return result
 
         return result
+
+    # =========================================================================
+    # DYNAMIC LOCATION TOOLS (2026-01-25)
+    # Agent dynamically queries these instead of hardcoded lists
+    # =========================================================================
+
+    async def _get_available_locations(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Get available locations dynamically from the database.
+
+        Agent uses this at conversation start or when user gives ambiguous location.
+        Returns miejscowości and gminy separately (in MVP they're the same).
+        """
+        try:
+            result = await graph_service.get_available_locations()
+            if "error" in result:
+                return result
+
+            return {
+                "miejscowosci": result.get("miejscowosci", []),
+                "gminy": result.get("gminy", []),
+                "total_parcels": result.get("total_parcels", 0),
+                "by_miejscowosc": result.get("by_miejscowosc", {}),
+                "hint": result.get("hint", "Podaj miejscowość lub dzielnicę."),
+                "note": "Użyj resolve_location() aby zwalidować tekst lokalizacji od użytkownika.",
+            }
+        except Exception as e:
+            logger.error(f"Get available locations error: {e}")
+            return {"error": str(e)}
+
+    async def _get_districts_in_miejscowosc(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Get districts in a given MIEJSCOWOŚĆ (not gmina!).
+
+        IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina!
+        In Trójmiasto MVP: gmina = miejscowość.
+        """
+        miejscowosc = params.get("miejscowosc")
+        if not miejscowosc:
+            return {"error": "Podaj miejscowość (np. 'Gdańsk', 'Gdynia', 'Sopot')"}
+
+        try:
+            result = await graph_service.get_districts_in_miejscowosc(miejscowosc)
+            if "error" in result:
+                return result
+
+            return {
+                "miejscowosc": result.get("miejscowosc"),
+                "gmina": result.get("gmina"),
+                "district_count": result.get("district_count", 0),
+                "parcel_count": result.get("parcel_count", 0),
+                "districts": result.get("districts", []),
+                "by_district": result.get("by_district", {}),
+                "note": "Dzielnica należy do MIEJSCOWOŚCI, nie do gminy!",
+            }
+        except Exception as e:
+            logger.error(f"Get districts in miejscowosc error: {e}")
+            return {"error": str(e)}
+
+    async def _resolve_location(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve user's location text to gmina + miejscowosc + dzielnica.
+
+        CRITICAL: Agent MUST use this before propose_search_preferences!
+        Automatically detects whether input is miejscowość or dzielnica.
+        """
+        location_text = params.get("location_text")
+        if not location_text:
+            return {"error": "Podaj tekst lokalizacji (location_text)"}
+
+        try:
+            result = await graph_service.resolve_location(location_text)
+
+            if result.get("resolved"):
+                return {
+                    "resolved": True,
+                    "gmina": result.get("gmina"),
+                    "miejscowosc": result.get("miejscowosc"),
+                    "dzielnica": result.get("dzielnica"),
+                    "parcel_count": result.get("parcel_count", 0),
+                    "original_input": location_text,
+                    "note": "Użyj tych wartości w propose_search_preferences.",
+                }
+            else:
+                return {
+                    "resolved": False,
+                    "error": result.get("error", f"Nie rozpoznano lokalizacji: {location_text}"),
+                    "available_miejscowosci": result.get("available_miejscowosci", []),
+                    "hint": result.get("hint", "Podaj nazwę miasta lub dzielnicy."),
+                    "original_input": location_text,
+                }
+        except Exception as e:
+            logger.error(f"Resolve location error: {e}")
+            return {"resolved": False, "error": str(e)}
+
+    async def _validate_location_combination(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate if miejscowość + dzielnica combination is correct.
+
+        IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina!
+        Use this when user provides miasto and dzielnica separately.
+        """
+        miejscowosc = params.get("miejscowosc")
+        dzielnica = params.get("dzielnica")
+        gmina = params.get("gmina")
+
+        if not dzielnica:
+            return {"error": "Podaj dzielnicę do walidacji"}
+
+        try:
+            result = await graph_service.validate_location_combination(
+                miejscowosc=miejscowosc,
+                dzielnica=dzielnica,
+                gmina=gmina
+            )
+
+            if result.get("valid"):
+                return {
+                    "valid": True,
+                    "miejscowosc": result.get("miejscowosc"),
+                    "dzielnica": result.get("dzielnica"),
+                    "gmina": result.get("gmina"),
+                    "parcel_count": result.get("parcel_count", 0),
+                    "message": f"Kombinacja poprawna: {result.get('dzielnica')} w {result.get('miejscowosc')}",
+                }
+            else:
+                return {
+                    "valid": False,
+                    "error": result.get("error"),
+                    "suggestion": result.get("suggestion"),
+                    "note": "Dzielnica należy do MIEJSCOWOŚCI, nie do gminy!",
+                }
+        except Exception as e:
+            logger.error(f"Validate location combination error: {e}")
+            return {"valid": False, "error": str(e)}
 
 
 # =============================================================================

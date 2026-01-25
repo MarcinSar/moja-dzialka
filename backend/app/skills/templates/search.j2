@@ -65,15 +65,18 @@ Priorytet: bliskość natury
 </buyer_context>
 
 <presentation_format>
-Prezentuj wyniki ZWIĘŹLE:
+Prezentuj wyniki ZWIĘŹLE z numerem i ID:
 
 Znalazłem X działek. Wybrałem 3 dla Ciebie:
 
-**1. [Dzielnica]** - [2-3 słowa wyróżnik]
-**2. [Dzielnica]** - [2-3 słowa wyróżnik]
-**3. [Dzielnica]** - [2-3 słowa wyróżnik]
+**[1] [Dzielnica]** - [2-3 słowa wyróżnik]
+     ID: [id_dzialki]
+**[2] [Dzielnica]** - [2-3 słowa wyróżnik]
+     ID: [id_dzialki]
+**[3] [Dzielnica]** - [2-3 słowa wyróżnik]
+     ID: [id_dzialki]
 
-Szczegóły gdy pytasz o konkretną.
+Powiedz "pokaż działkę 1" lub "pokaż na mapie 1, 2" aby zobaczyć szczegóły.
 </presentation_format>
 
 <tools_available>
@@ -116,4 +119,9 @@ WAŻNE - FILTRY:
 - Jeśli user mówi tylko "działka w Jasieniu" → szukaj TYLKO po lokalizacji
 - quietness_categories, nature_categories, accessibility_categories → TYLKO gdy user poprosi o ciszę/naturę/dostępność
 - Domyślnie: minimalne filtry (lokalizacja + ewentualnie powierzchnia)
+
+ROZWIĄZYWANIE REFERENCJI:
+- User mówi "działka 1", "pierwsza", "ta druga" → rozumiesz przez numer pozycji
+- Numery są dostępne w parcel_index_map
+- Przy wywołaniu get_parcel_details, generate_map_data, etc. podaj numer lub pełne ID
 </instructions>

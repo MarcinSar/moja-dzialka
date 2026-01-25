@@ -128,7 +128,7 @@ function App() {
               duration_ms: parsed.toolResult.duration_ms,
             });
 
-            // Handle execute_search results - show parcel reveal card
+            // Handle execute_search results - transition to immersive search results view
             if (parsed.toolResult.tool === 'execute_search') {
               const result = parsed.toolResult.result as {
                 parcels?: Array<{
@@ -141,8 +141,8 @@ function App() {
                   accessibility_score?: number;
                   has_mpzp?: boolean;
                   mpzp_symbol?: string;
-                  lat?: number;
-                  lon?: number;
+                  centroid_lat?: number;
+                  centroid_lon?: number;
                   // Backend-generated highlights and explanation
                   highlights?: string[];
                   explanation?: string;
@@ -151,7 +151,7 @@ function App() {
               };
 
               if (result?.parcels && result.parcels.length > 0) {
-                console.log('[Reveal] Received search results with', result.parcels.length, 'parcels');
+                console.log('[SearchResults] Received', result.parcels.length, 'parcels - transitioning to immersive view');
 
                 // Transform parcels to SearchResultItem format
                 const parcelsWithExplanations = result.parcels.map((p) => {
@@ -167,8 +167,8 @@ function App() {
                     accessibility_score: p.accessibility_score ?? null,
                     has_mpzp: p.has_mpzp ?? null,
                     mpzp_symbol: p.mpzp_symbol || null,
-                    centroid_lat: p.lat ?? null,
-                    centroid_lon: p.lon ?? null,
+                    centroid_lat: p.centroid_lat ?? null,
+                    centroid_lon: p.centroid_lon ?? null,
                     distance_m: null,
                   };
 
@@ -180,13 +180,19 @@ function App() {
                   };
                 });
 
-                // Update the reveal store and show the card
+                // Update the reveal store with parcels data
                 const revealStore = useParcelRevealStore.getState();
                 revealStore.setParcels(parcelsWithExplanations);
-                revealStore.showReveal();
 
                 // Set avatar mood
                 setAvatarMood('excited');
+
+                // Auto-transition to immersive search results view after a short delay
+                // This creates a "wow" reveal effect
+                setTimeout(() => {
+                  const { transitionToSearchResults } = useUIPhaseStore.getState();
+                  transitionToSearchResults();
+                }, 500);
               }
             }
 
@@ -263,46 +269,56 @@ function App() {
           setAvatarMood('idle');
           break;
 
-        // LiDAR events
+        // LiDAR events - fields are directly on the event, not in event.data
         case 'lidar_started':
           {
-            const data = event.data as { job_id?: string; parcel_id?: string };
-            if (data.job_id && data.parcel_id) {
-              console.log('[LiDAR] Started job:', data.job_id);
-              startLoading(data.parcel_id, data.job_id);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ev = event as any;
+            if (ev.job_id && ev.parcel_id) {
+              console.log('[LiDAR] Started job:', ev.job_id);
+              startLoading(ev.parcel_id, ev.job_id);
+            } else {
+              console.warn('[LiDAR] lidar_started missing fields:', event);
             }
           }
           break;
 
         case 'lidar_progress':
           {
-            const data = event.data as { progress?: number; message?: string; status?: string };
-            if (data.progress !== undefined) {
-              console.log('[LiDAR] Progress:', data.progress, data.message);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ev = event as any;
+            if (ev.progress !== undefined) {
+              console.log('[LiDAR] Progress:', ev.progress, ev.message);
               updateProgress(
-                data.progress,
-                data.message || 'Przetwarzanie...',
-                data.status as 'downloading' | 'converting' | undefined
+                ev.progress,
+                ev.message || 'Przetwarzanie...',
+                ev.status as 'downloading' | 'converting' | undefined
               );
+            } else {
+              console.warn('[LiDAR] lidar_progress missing fields:', event);
             }
           }
           break;
 
         case 'lidar_ready':
           {
-            const data = event.data as { potree_url?: string; tile_id?: string };
-            if (data.potree_url) {
-              console.log('[LiDAR] Ready:', data.potree_url);
-              setReady(data.potree_url, data.tile_id || '');
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ev = event as any;
+            if (ev.potree_url) {
+              console.log('[LiDAR] Ready:', ev.potree_url);
+              setReady(ev.potree_url, ev.tile_id || '');
+            } else {
+              console.warn('[LiDAR] lidar_ready missing fields:', event);
             }
           }
           break;
 
         case 'lidar_error':
           {
-            const data = event.data as { message?: string };
-            console.error('[LiDAR] Error:', data.message);
-            setError(data.message || 'Błąd przetwarzania LiDAR');
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const ev = event as any;
+            console.error('[LiDAR] Error:', ev.message);
+            setError(ev.message || 'Błąd przetwarzania LiDAR');
           }
           break;
 
