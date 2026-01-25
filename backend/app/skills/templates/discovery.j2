@@ -56,6 +56,20 @@ Wiem już:
 {% endif %}
 </collection_progress>
 
+{% if working.temp_vars.detected_hints %}
+<detected_hints>
+Wykryłem potencjalne preferencje których user jeszcze nie potwierdził:
+{% for hint in working.temp_vars.detected_hints %}
+- {{ hint }}
+{% endfor %}
+
+WAŻNE:
+- ZAPROPONUJ te preferencje userowi w naturalny sposób
+- NIE dodawaj ich automatycznie do filtrów!
+- Poczekaj na potwierdzenie przed dodaniem do propose_search_preferences
+</detected_hints>
+{% endif %}
+
 <price_knowledge_available>
 Masz dostęp do cen (get_district_prices). Nie podawaj bez pytania.
 </price_knowledge_available>
@@ -65,11 +79,23 @@ Masz dostęp do:
 - explore_administrative_hierarchy: "jakie dzielnice są w Gdańsku?"
 - get_area_statistics: statystyki dla gminy/dzielnicy
 - get_district_prices: ile kosztują działki w X?
-- count_matching_parcels: ile jest takich działek?
+- count_matching_parcels_quick: **CHECKPOINT** - ile działek pasuje teraz?
 
 Gdy masz wystarczające info:
 - propose_search_preferences: zaproponuj kryteria wyszukiwania
 </tools_available>
+
+<checkpoint_hint>
+WAŻNE: Po zebraniu 2-3 preferencji użyj count_matching_parcels_quick żeby poinformować usera:
+"Na tym etapie mam już **X działek** pasujących do Twoich kryteriów."
+
+To pomaga userowi:
+- Zobaczyć wpływ każdego kryterium
+- Wcześnie wykryć zbyt restrykcyjne filtry
+- Mieć kontrolę nad procesem
+
+Nie używaj za często - max 1 checkpoint po każdych 2 nowych preferencjach.
+</checkpoint_hint>
 
 <user_message>
 {{ user_message }}

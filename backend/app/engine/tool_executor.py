@@ -97,6 +97,9 @@ class ToolExecutor:
             elif tool_name == "count_matching_parcels":
                 result = await self._count_matching_parcels(params)
                 return result, {}
+            elif tool_name == "count_matching_parcels_quick":
+                result = await self._count_matching_parcels_quick(params)
+                return result, {}
             elif tool_name == "get_mpzp_symbols":
                 result = await self._get_mpzp_symbols(params)
                 return result, {}
@@ -212,7 +215,7 @@ class ToolExecutor:
             "gmina": gmina_param,
             "miejscowosc": miejscowosc_param,
             "powiat": powiat_param,
-            "charakter_terenu": params.get("charakter_terenu"),
+            # NOTE: charakter_terenu removed - data is NULL for all parcels in Neo4j
             "lat": params.get("lat"),
             "lon": params.get("lon"),
             "radius_m": params.get("radius_m", 5000),
@@ -236,9 +239,10 @@ class ToolExecutor:
             "mpzp_buildable": params.get("mpzp_buildable"),
             "mpzp_symbols": params.get("mpzp_symbols"),
             "sort_by": params.get("sort_by", "quietness_score"),
-            "quietness_weight": params.get("quietness_weight", 0.5),
-            "nature_weight": params.get("nature_weight", 0.3),
-            "accessibility_weight": params.get("accessibility_weight", 0.2),
+            # Weights only when user mentioned the category (no defaults!)
+            "quietness_weight": params.get("quietness_weight") if params.get("quietness_categories") else None,
+            "nature_weight": params.get("nature_weight") if params.get("nature_categories") else None,
+            "accessibility_weight": params.get("accessibility_weight") if params.get("accessibility_categories") else None,
         }
 
         # Build human-readable summary
@@ -248,8 +252,7 @@ class ToolExecutor:
         }
         if preferences["miejscowosc"]:
             summary["miejscowosc"] = preferences["miejscowosc"]
-        if preferences["charakter_terenu"]:
-            summary["charakter"] = ", ".join(preferences["charakter_terenu"])
+        # NOTE: charakter_terenu removed - data not available
         if preferences.get("lat") and preferences.get("lon"):
             radius = preferences.get("radius_m", 5000)
             summary["wyszukiwanie_przestrzenne"] = f"w promieniu {radius/1000:.1f}km od punktu"
@@ -374,7 +377,7 @@ class ToolExecutor:
             min_area=prefs.get("min_area_m2"),
             max_area=prefs.get("max_area_m2"),
             area_category=prefs.get("area_category"),
-            charakter_terenu=prefs.get("charakter_terenu"),
+            # NOTE: charakter_terenu removed - data not available in Neo4j
             quietness_categories=prefs.get("quietness_categories"),
             building_density=prefs.get("building_density"),
             min_dist_to_industrial_m=prefs.get("min_dist_to_industrial_m"),
@@ -392,17 +395,45 @@ class ToolExecutor:
             mpzp_budowlane=prefs.get("mpzp_buildable"),
             mpzp_symbols=prefs.get("mpzp_symbols"),
             sort_by=prefs.get("sort_by", "quietness_score"),
-            quietness_weight=prefs.get("quietness_weight", 0.5),
-            nature_weight=prefs.get("nature_weight", 0.3),
-            accessibility_weight=prefs.get("accessibility_weight", 0.2),
+            # Weights are None if user didn't mention the category
+            quietness_weight=prefs.get("quietness_weight"),
+            nature_weight=prefs.get("nature_weight"),
+            accessibility_weight=prefs.get("accessibility_weight"),
         )
 
         results = await hybrid_search.search(search_prefs, limit=limit, include_details=True)
 
-        # If no results, run diagnostics to find the blocking filter
+        # If no results, run diagnostics and try auto-fallback
         diagnostics = None
+        fallback_info = None
         if not results:
             diagnostics = await self._diagnose_empty_results(prefs)
+
+            # Try auto-fallback if diagnostics suggest a relaxation
+            if diagnostics.get("relaxation"):
+                fallback_results, fallback_info = await self._auto_fallback_search(prefs, diagnostics, limit)
+                if fallback_results:
+                    # Use fallback results instead
+                    iteration = self._search_state.search_iteration + 1
+
+                    result = {
+                        "status": "results_with_fallback",
+                        "iteration": iteration,
+                        "count": len(fallback_results),
+                        "parcels": fallback_results,
+                        "fallback_info": fallback_info,
+                        "message": f"Nie znalazłem działek z oryginalnymi kryteriami. {fallback_info['change_description'].capitalize()}. Znalazłem {len(fallback_results)} działek.",
+                        "original_diagnostics": diagnostics,
+                    }
+
+                    state_updates = {
+                        "search_state.current_results": fallback_results,
+                        "search_state.search_executed": True,
+                        "search_state.results_shown": len(fallback_results),
+                        "search_state.search_iteration": iteration,
+                    }
+
+                    return result, state_updates
 
         current_results = []
         for r in results:
@@ -485,47 +516,46 @@ class ToolExecutor:
                 diagnostics["suggestion"] = "Sprawdź nazwę dzielnicy lub wybierz inną lokalizację."
                 return diagnostics
 
-            # Test each filter incrementally
-            filters_to_test = [
-                ("area", f"p.area_m2 >= {prefs.get('min_area_m2', 0)} AND p.area_m2 <= {prefs.get('max_area_m2', 999999)}",
-                 f"powierzchnia {prefs.get('min_area_m2')}-{prefs.get('max_area_m2')} m²"),
-
-                ("quietness", "EXISTS((p)-[:HAS_QUIETNESS]->(:QuietnessCategory {id: q})) WHERE q IN $quietness_cats" if prefs.get("quietness_categories") else None,
-                 f"cisza: {prefs.get('quietness_categories')}"),
-
-                ("density", None, f"zabudowa: {prefs.get('building_density')}"),
+            # Test category filters with their distribution
+            category_filters = [
+                ("quietness_categories", "HAS_QUIETNESS", "QuietnessCategory", "cisza"),
+                ("nature_categories", "HAS_NATURE", "NatureCategory", "natura"),
+                ("building_density", "HAS_DENSITY", "DensityCategory", "gęstość zabudowy"),
+                ("accessibility_categories", "HAS_ACCESS", "AccessCategory", "dostępność"),
             ]
 
-            # Simplified: just check quietness category distribution
-            if prefs.get("quietness_categories"):
-                query = f"""
-                    MATCH (p:Parcel)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)
-                    WHERE {where_clause}
-                    RETURN qc.id as category, count(p) as cnt
-                    ORDER BY cnt DESC
-                """
-                records = await neo4j.run(query, params)
-                available_categories = {r["category"]: r["cnt"] for r in records}
-                requested = prefs.get("quietness_categories", [])
-                matching = sum(available_categories.get(cat, 0) for cat in requested)
+            for filter_name, rel_name, node_type, polish_name in category_filters:
+                if prefs.get(filter_name):
+                    query = f"""
+                        MATCH (p:Parcel)-[:{rel_name}]->(c:{node_type})
+                        WHERE {where_clause}
+                        RETURN c.id as category, count(p) as cnt
+                        ORDER BY cnt DESC
+                    """
+                    records = await neo4j.run(query, params)
+                    available_categories = {r["category"]: r["cnt"] for r in records}
+                    requested = prefs.get(filter_name, [])
+                    matching = sum(available_categories.get(cat, 0) for cat in requested)
 
-                diagnostics["quietness_analysis"] = {
-                    "requested": requested,
-                    "available_in_location": available_categories,
-                    "matching_count": matching
-                }
+                    diagnostics[f"{filter_name}_analysis"] = {
+                        "requested": requested,
+                        "available_in_location": available_categories,
+                        "matching_count": matching
+                    }
 
-                if matching == 0:
-                    dominant = max(available_categories.items(), key=lambda x: x[1]) if available_categories else ("brak", 0)
-                    diagnostics["blocking_filter"] = "quietness_categories"
-                    diagnostics["message"] = f"W '{location}' nie ma działek o ciszy {requested}. Dominuje: '{dominant[0]}' ({dominant[1]} działek)."
+                    if matching == 0:
+                        dominant = max(available_categories.items(), key=lambda x: x[1]) if available_categories else ("brak", 0)
+                        diagnostics["blocking_filter"] = filter_name
+                        diagnostics["message"] = f"W '{location}' nie ma działek z {polish_name}: {requested}. Dominuje: '{dominant[0]}' ({dominant[1]} działek)."
 
-                    # Suggest alternative
-                    if dominant[0] == "glosna":
-                        diagnostics["suggestion"] = f"'{location}' to głośna okolica. Rozważ: 1) usuń filtr ciszy, 2) lub szukaj w cichszych dzielnicach (np. Matemblewo, VII Dwór, Osowa)."
-                    else:
-                        diagnostics["suggestion"] = f"Zmień kryterium ciszy na '{dominant[0]}' lub usuń ten filtr."
-                    return diagnostics
+                        # Relaxation suggestions
+                        if filter_name == "quietness_categories" and dominant[0] == "głośna":
+                            diagnostics["suggestion"] = f"'{location}' to głośna okolica. Rozważ cichsze dzielnice (Matemblewo, VII Dwór, Osowa)."
+                            diagnostics["relaxation"] = {"quietness_categories": None}
+                        else:
+                            diagnostics["suggestion"] = f"Zmień kryterium {polish_name} na '{dominant[0]}' lub usuń filtr."
+                            diagnostics["relaxation"] = {filter_name: [dominant[0]] if dominant[0] != "brak" else None}
+                        return diagnostics
 
             # Check area filter
             if prefs.get("min_area_m2") or prefs.get("max_area_m2"):
@@ -548,18 +578,164 @@ class ToolExecutor:
                     diagnostics["blocking_filter"] = "area"
                     diagnostics["message"] = f"Brak działek {min_a}-{max_a} m² w '{location}'."
                     diagnostics["suggestion"] = "Rozszerz zakres powierzchni."
+                    # Relax by ±50%
+                    diagnostics["relaxation"] = {
+                        "min_area_m2": int(min_a * 0.5),
+                        "max_area_m2": int(max_a * 1.5)
+                    }
                     return diagnostics
+
+            # Check distance filters
+            distance_filters = [
+                ("max_dist_to_forest_m", "dist_to_forest", "las"),
+                ("max_dist_to_water_m", "dist_to_water", "woda"),
+                ("max_dist_to_school_m", "dist_to_school", "szkoła"),
+                ("max_dist_to_shop_m", "dist_to_supermarket", "sklep"),
+            ]
+
+            for filter_name, db_field, polish_name in distance_filters:
+                if prefs.get(filter_name):
+                    max_dist = prefs[filter_name]
+                    query = f"""
+                        MATCH (p:Parcel)
+                        WHERE {where_clause} AND p.{db_field} <= $max_dist
+                        RETURN count(p) as cnt
+                    """
+                    params["max_dist"] = max_dist
+
+                    results = await neo4j.run(query, params)
+                    dist_count = results[0]["cnt"] if results else 0
+
+                    if dist_count == 0:
+                        diagnostics["blocking_filter"] = filter_name
+                        diagnostics["message"] = f"Brak działek w odległości {max_dist}m od {polish_name} w '{location}'."
+                        diagnostics["suggestion"] = f"Zwiększ odległość do {polish_name} lub usuń filtr."
+                        diagnostics["relaxation"] = {filter_name: max_dist * 2}
+                        return diagnostics
 
             # Generic fallback - combination of filters is too restrictive
             diagnostics["blocking_filter"] = "combination"
             diagnostics["message"] = "Kombinacja wszystkich filtrów jest zbyt restrykcyjna."
             diagnostics["suggestion"] = "Poluzuj niektóre kryteria: cisza, zabudowa, lub odległości do POI."
+            diagnostics["relaxation"] = None
 
             return diagnostics
 
         except Exception as e:
             logger.error(f"Diagnostics error: {e}")
             return {"error": str(e), "suggestion": "Spróbuj poluzować kryteria wyszukiwania."}
+
+    async def _auto_fallback_search(
+        self,
+        prefs: Dict[str, Any],
+        diagnostics: Dict[str, Any],
+        limit: int = 10
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Auto-relax blocking filter and retry search.
+
+        Args:
+            prefs: Original preferences
+            diagnostics: Diagnostics from _diagnose_empty_results
+            limit: Max results
+
+        Returns:
+            Tuple of (results_list, fallback_info)
+        """
+        blocking = diagnostics.get("blocking_filter")
+        relaxation = diagnostics.get("relaxation")
+
+        if not blocking or blocking == "location" or not relaxation:
+            # Can't auto-fallback for location issues or unknown blocks
+            return [], {"auto_fallback_applied": False, "reason": "Cannot auto-relax this filter"}
+
+        # Create new preferences with relaxed filter
+        new_prefs = prefs.copy()
+        change_descriptions = []
+
+        for field, new_value in relaxation.items():
+            old_value = prefs.get(field)
+            new_prefs[field] = new_value
+
+            if new_value is None:
+                change_descriptions.append(f"usunięto filtr {field}")
+            elif isinstance(new_value, list):
+                change_descriptions.append(f"zmieniono {field} z {old_value} na {new_value}")
+            else:
+                change_descriptions.append(f"rozszerzono {field} z {old_value} do {new_value}")
+
+        change_description = ", ".join(change_descriptions)
+
+        # Build new SearchPreferences and execute
+        search_prefs = SearchPreferences(
+            gmina=new_prefs.get("gmina"),
+            miejscowosc=new_prefs.get("miejscowosc"),
+            powiat=new_prefs.get("powiat"),
+            lat=new_prefs.get("lat"),
+            lon=new_prefs.get("lon"),
+            radius_m=new_prefs.get("radius_m", 5000),
+            min_area=new_prefs.get("min_area_m2"),
+            max_area=new_prefs.get("max_area_m2"),
+            area_category=new_prefs.get("area_category"),
+            quietness_categories=new_prefs.get("quietness_categories"),
+            building_density=new_prefs.get("building_density"),
+            min_dist_to_industrial_m=new_prefs.get("min_dist_to_industrial_m"),
+            nature_categories=new_prefs.get("nature_categories"),
+            max_dist_to_forest_m=new_prefs.get("max_dist_to_forest_m"),
+            max_dist_to_water_m=new_prefs.get("max_dist_to_water_m"),
+            min_forest_pct_500m=new_prefs.get("min_forest_pct_500m"),
+            accessibility_categories=new_prefs.get("accessibility_categories"),
+            max_dist_to_school_m=new_prefs.get("max_dist_to_school_m"),
+            max_dist_to_shop_m=new_prefs.get("max_dist_to_shop_m"),
+            max_dist_to_bus_stop_m=new_prefs.get("max_dist_to_bus_stop_m"),
+            max_dist_to_hospital_m=new_prefs.get("max_dist_to_hospital_m"),
+            has_road_access=new_prefs.get("has_road_access"),
+            has_mpzp=new_prefs.get("requires_mpzp"),
+            mpzp_budowlane=new_prefs.get("mpzp_buildable"),
+            mpzp_symbols=new_prefs.get("mpzp_symbols"),
+            sort_by=new_prefs.get("sort_by", "quietness_score"),
+            quietness_weight=new_prefs.get("quietness_weight"),
+            nature_weight=new_prefs.get("nature_weight"),
+            accessibility_weight=new_prefs.get("accessibility_weight"),
+        )
+
+        results = await hybrid_search.search(search_prefs, limit=limit, include_details=True)
+
+        fallback_info = {
+            "auto_fallback_applied": True,
+            "original_filter": blocking,
+            "change_description": change_description,
+            "original_prefs": {k: v for k, v in prefs.items() if k in relaxation},
+            "new_prefs": {k: v for k, v in new_prefs.items() if k in relaxation},
+            "results_count": len(results),
+        }
+
+        # Convert results to dicts
+        result_dicts = []
+        for r in results:
+            parcel_dict = {
+                "id": r.parcel_id,
+                "gmina": r.gmina,
+                "miejscowosc": r.miejscowosc,
+                "area_m2": r.area_m2,
+                "quietness_score": r.quietness_score,
+                "nature_score": r.nature_score,
+                "accessibility_score": r.accessibility_score,
+                "has_mpzp": r.has_mpzp,
+                "mpzp_symbol": r.mpzp_symbol,
+                "centroid_lat": r.centroid_lat,
+                "centroid_lon": r.centroid_lon,
+                "dist_to_forest": r.dist_to_forest,
+                "dist_to_water": r.dist_to_water,
+                "dist_to_school": r.dist_to_school,
+                "dist_to_shop": r.dist_to_shop,
+                "pct_forest_500m": r.pct_forest_500m,
+                "has_road_access": r.has_road_access,
+            }
+            parcel_dict["highlights"] = self._generate_highlights(parcel_dict, new_prefs)
+            parcel_dict["explanation"] = self._generate_explanation(parcel_dict)
+            result_dicts.append(parcel_dict)
+
+        return result_dicts, fallback_info
 
     async def _critique_search_results(self, params: Dict[str, Any]) -> ToolResult:
         """Record feedback about search results (Critic pattern)."""
@@ -719,11 +895,12 @@ class ToolExecutor:
             else:
                 highlights.append("Ma MPZP")
 
-        if prefs.get("quietness_weight", 0) >= 0.5 and quietness and quietness >= 80:
+        # Only show weighted highlights if user explicitly set the weight
+        if (prefs.get("quietness_weight") or 0) >= 0.5 and quietness and quietness >= 80:
             if not any("Cisza" in h for h in highlights):
                 highlights.append("Cicha okolica")
 
-        if prefs.get("nature_weight", 0) >= 0.5 and nature and nature >= 70:
+        if (prefs.get("nature_weight") or 0) >= 0.5 and nature and nature >= 70:
             if not any("Natura" in h for h in highlights):
                 highlights.append("Blisko natury")
 
@@ -812,6 +989,78 @@ class ToolExecutor:
             has_mpzp=params.get("has_mpzp"),
         )
         return {"count": count, "filters": params}
+
+    async def _count_matching_parcels_quick(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Quick count based on current perceived preferences - for checkpoint searches.
+
+        Uses perceived_preferences from state if no params provided.
+        Useful for showing users how many parcels match their evolving criteria.
+        """
+        # Merge state preferences with any additional params
+        prefs = {}
+        if self._search_state.perceived_preferences:
+            prefs = self._search_state.perceived_preferences.copy()
+        prefs.update(params)
+
+        # Build query conditions
+        conditions = []
+        query_params = {}
+
+        if prefs.get("gmina"):
+            conditions.append("p.gmina = $gmina")
+            query_params["gmina"] = prefs["gmina"]
+
+        if prefs.get("miejscowosc"):
+            conditions.append("p.dzielnica = $dzielnica")
+            query_params["dzielnica"] = prefs["miejscowosc"]
+
+        if prefs.get("min_area_m2"):
+            conditions.append("p.area_m2 >= $min_area")
+            query_params["min_area"] = prefs["min_area_m2"]
+
+        if prefs.get("max_area_m2"):
+            conditions.append("p.area_m2 <= $max_area")
+            query_params["max_area"] = prefs["max_area_m2"]
+
+        if prefs.get("requires_mpzp"):
+            conditions.append("p.pog_symbol IS NOT NULL")
+
+        if prefs.get("mpzp_buildable"):
+            conditions.append("p.is_residential_zone = true")
+
+        # Build simple count query (no category joins for speed)
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        query = f"MATCH (p:Parcel) WHERE {where_clause} RETURN count(p) as cnt"
+
+        try:
+            results = await neo4j.run(query, query_params)
+            count = results[0]["cnt"] if results else 0
+
+            # Build human-readable criteria summary
+            criteria_summary = []
+            if prefs.get("gmina"):
+                criteria_summary.append(f"gmina: {prefs['gmina']}")
+            if prefs.get("miejscowosc"):
+                criteria_summary.append(f"dzielnica: {prefs['miejscowosc']}")
+            if prefs.get("min_area_m2") or prefs.get("max_area_m2"):
+                min_a = prefs.get("min_area_m2", 0)
+                max_a = prefs.get("max_area_m2", "∞")
+                criteria_summary.append(f"powierzchnia: {min_a}-{max_a} m²")
+            if prefs.get("quietness_categories"):
+                criteria_summary.append(f"cisza: {', '.join(prefs['quietness_categories'])}")
+            if prefs.get("nature_categories"):
+                criteria_summary.append(f"natura: {', '.join(prefs['nature_categories'])}")
+
+            return {
+                "matching_count": count,
+                "criteria_used": prefs,
+                "criteria_summary": criteria_summary,
+                "message": f"Na podstawie aktualnych kryteriów: **{count:,}** pasujących działek.".replace(",", " "),
+                "note": "To szybkie zliczenie - pełne wyszukiwanie może uwzględnić więcej filtrów.",
+            }
+        except Exception as e:
+            logger.error(f"Quick count error: {e}")
+            return {"error": str(e), "matching_count": 0}
 
     async def _get_mpzp_symbols(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Get MPZP symbol definitions."""

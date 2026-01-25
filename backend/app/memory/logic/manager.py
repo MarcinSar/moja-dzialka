@@ -232,21 +232,76 @@ class MemoryManager:
                     profile.size_m2_max = int(value * 1.2)
                     break
 
-        # Preference extraction
+        # Preference extraction with hints system
+        # hint_* prefixes mean we suggest to user, NOT auto-assign
         preference_keywords = {
+            # Cisza (auto-set priority)
             "cicho": ("quietness", 0.8),
             "cisza": ("quietness", 0.8),
             "spokój": ("quietness", 0.7),
+            "spokojna": ("quietness", 0.7),
+            "spokojne": ("quietness", 0.7),
+            "spokojny": ("quietness", 0.7),
+
+            # Natura (auto-set priority)
             "las": ("nature", 0.8),
+            "lasu": ("nature", 0.8),
+            "lasem": ("nature", 0.8),
             "natura": ("nature", 0.8),
+            "natury": ("nature", 0.8),
             "zieleń": ("nature", 0.7),
+            "zielona": ("nature", 0.7),
+            "zielone": ("nature", 0.7),
+            "zieleni": ("nature", 0.7),
+
+            # Szkoły (auto-set, also set hint)
             "szkoła": ("schools", True),
-            "dzieci": ("schools", True),
+            "szkoły": ("schools", True),
+            "szkole": ("schools", True),
+
+            # Dostępność (auto-set priority)
             "sklep": ("accessibility", 0.6),
+            "sklepu": ("accessibility", 0.6),
             "komunikacja": ("accessibility", 0.7),
+            "komunikacji": ("accessibility", 0.7),
+            "autobus": ("accessibility", 0.6),
+            "tramwaj": ("accessibility", 0.6),
+
+            # HINTS - NOT auto-assigned, agent should propose
+            "rodzina": ("hint_schools", "Wspomniałeś o rodzinie - czy bliskość szkół jest dla Ciebie ważna?"),
+            "rodziny": ("hint_schools", "Wspomniałeś o rodzinie - czy bliskość szkół jest dla Ciebie ważna?"),
+            "rodzinę": ("hint_schools", "Wspomniałeś o rodzinie - czy bliskość szkół jest dla Ciebie ważna?"),
+            "dzieci": ("hint_schools", "Masz dzieci - czy szkoły i przedszkola są ważne?"),
+            "dziecko": ("hint_schools", "Masz dziecko - czy szkoły i przedszkola są ważne?"),
+
+            "wsi": ("hint_rural", "Wspomniałeś o wsi - szukasz rzadkiej zabudowy na obrzeżach?"),
+            "wieś": ("hint_rural", "Wspomniałeś o wsi - szukasz rzadkiej zabudowy na obrzeżach?"),
+            "wiejska": ("hint_rural", "Wspomniałeś o charakterze wiejskim - szukasz rzadkiej zabudowy?"),
+            "wiejski": ("hint_rural", "Wspomniałeś o charakterze wiejskim - szukasz rzadkiej zabudowy?"),
+
+            "podmiejska": ("hint_suburban", "Wspomniałeś o charakterze podmiejskim - umiarkowana zabudowa?"),
+            "podmiejski": ("hint_suburban", "Wspomniałeś o charakterze podmiejskim - umiarkowana zabudowa?"),
+
+            "inwestycja": ("hint_investment", "Szukasz działki inwestycyjnej - czy ma być budowlana (MN/U)?"),
+            "inwestycji": ("hint_investment", "Szukasz działki inwestycyjnej - czy ma być budowlana (MN/U)?"),
+            "inwestycyjne": ("hint_investment", "Szukasz działki inwestycyjnej - czy ma być budowlana (MN/U)?"),
+            "inwestycyjną": ("hint_investment", "Szukasz działki inwestycyjnej - czy ma być budowlana (MN/U)?"),
         }
+
+        # Initialize detected_hints if not exists
+        if "detected_hints" not in state.working.temp_vars:
+            state.working.temp_vars["detected_hints"] = []
+
         for keyword, (pref, value) in preference_keywords.items():
             if keyword in content_lower:
+                # Handle hints (NOT auto-assigned)
+                if pref.startswith("hint_"):
+                    hint_msg = value
+                    if hint_msg not in state.working.temp_vars["detected_hints"]:
+                        state.working.temp_vars["detected_hints"].append(hint_msg)
+                    continue
+
+                # Handle regular preferences (auto-assigned)
                 progress.preferences_collected = True
                 if pref == "quietness":
                     profile.priority_quietness = max(profile.priority_quietness, value)

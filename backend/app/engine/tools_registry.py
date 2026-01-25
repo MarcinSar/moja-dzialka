@@ -58,11 +58,7 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                     "description": "Promień wyszukiwania w metrach od punktu (lat, lon). Domyślnie 5000m. Max 20000m."
                 },
 
-                "charakter_terenu": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": ["wiejski", "podmiejski", "miejski", "leśny", "mieszany"]},
-                    "description": "Charakter terenu"
-                },
+                # NOTE: charakter_terenu removed - data not available in Neo4j
 
                 # === POWIERZCHNIA ===
                 "min_area_m2": {
@@ -206,7 +202,7 @@ Użyj gdy użytkownik chce zmienić tylko jedną rzecz w propozycji.
                 "field": {
                     "type": "string",
                     "enum": [
-                        "gmina", "miejscowosc", "powiat", "charakter_terenu",
+                        "gmina", "miejscowosc", "powiat",
                         "lat", "lon", "radius_m",
                         "min_area_m2", "max_area_m2", "area_category",
                         "quietness_categories", "building_density", "min_dist_to_industrial_m",
@@ -369,6 +365,48 @@ Użyj do podglądu ile wyników będzie przed pełnym wyszukiwaniem.
             "properties": {
                 "gmina": {"type": "string"},
                 "has_mpzp": {"type": "boolean"}
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "count_matching_parcels_quick",
+        "description": """
+CHECKPOINT SEARCH: Szybkie sprawdzenie ile działek pasuje do AKTUALNYCH kryteriów.
+
+KIEDY UŻYWAĆ:
+- W trakcie zbierania preferencji (discovery), żeby informować usera o postępie
+- Po zebraniu 2-3 preferencji, pokaż: "Na tym etapie mam już X działek pasujących"
+- Pomaga userowi zrozumieć wpływ każdego kryterium
+
+Używa preferencji z pamięci stanu (perceived_preferences).
+Możesz dodać parametry żeby nadpisać lub rozszerzyć.
+
+PRZYKŁAD:
+User: "Szukam w Gdańsku" → count_matching_parcels_quick()
+→ "Na podstawie aktualnych kryteriów: 45,000 pasujących działek."
+User: "Blisko lasu" → count_matching_parcels_quick()
+→ "Na podstawie aktualnych kryteriów: 12,300 pasujących działek."
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "gmina": {
+                    "type": "string",
+                    "description": "Opcjonalnie nadpisz gminę"
+                },
+                "miejscowosc": {
+                    "type": "string",
+                    "description": "Opcjonalnie nadpisz dzielnicę"
+                },
+                "min_area_m2": {
+                    "type": "number",
+                    "description": "Opcjonalnie nadpisz min powierzchnię"
+                },
+                "max_area_m2": {
+                    "type": "number",
+                    "description": "Opcjonalnie nadpisz max powierzchnię"
+                }
             },
             "required": []
         }

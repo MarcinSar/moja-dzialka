@@ -503,8 +503,7 @@ class GraphService:
             where_conditions.append("p.size_category IN $area_categories")
             params["area_categories"] = criteria.area_category
 
-        # Character filters - charakter_terenu not available in new schema
-        # Skip criteria.charakter_terenu
+        # NOTE: charakter_terenu filter removed - data is NULL for all parcels
 
         # Category filters via relationships (NEW schema)
         if criteria.quietness_categories:

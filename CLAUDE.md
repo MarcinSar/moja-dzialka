@@ -1,11 +1,15 @@
 # CLAUDE.md - Projekt moja-dzialka
 
-## Status: AGENT V2 - STYL KONWERSACJI UPROSZCZONY (2026-01-24)
+## Status: AGENT V2 - WORKFLOW NAPRAWIONY (2026-01-25)
 
 Agent z 7-warstwowym modelem pamięci, skills registry i state machine routing.
 **UKOŃCZONE:** Neo4j Knowledge Graph (154,959 działek), graph_service.py przepisany.
-**NOWE:** Uproszczony styl konwersacji (krótkie odpowiedzi, budżet opcjonalny, bez powtórzeń).
-**NAPRAWIONE:** Skill routing (discovery → search transition), rozpoznawanie potwierdzenia użytkownika.
+**NOWE (2026-01-25):** Naprawiony workflow preferencji i wyszukiwania:
+- Usunięto `charakter_terenu` (dane NULL)
+- Wagi tylko gdy user wspomniał o kategorii
+- Rozszerzone słowa kluczowe + system hintów
+- Auto-fallback przy 0 wyników
+- Checkpoint searches podczas discovery
 API v1 (legacy) + API v2 (nowa architektura).
 Szczegółowy plan: `docs/PLAN_V2.md`, `docs/PLAN_V3_CONSOLIDATED.md`
 
@@ -614,6 +618,40 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d  # Prod
 ---
 
 ## Changelog
+
+### 2026-01-25: Naprawa workflow agenta - preferencje i wyszukiwanie
+
+**5 problemów naprawionych:**
+
+1. **`charakter_terenu` usunięty** - dane NULL dla wszystkich 154,959 działek
+   - Usunięto z `tool_executor.py`, `tools_registry.py`, `graph_service.py`
+
+2. **Wagi warunkowe** - tylko gdy user wspomniał o kategorii
+   - Zmieniono defaulty `quietness_weight=0.5` → `None` jeśli brak `quietness_categories`
+   - User mówi "działka w Gdańsku" → brak filtrów ciszy/natury
+
+3. **Rozszerzone słowa kluczowe + system hintów**
+   - Dodano 40+ słów: "spokojna", "zielone", "lasu", etc.
+   - **Hinty** (hint_*): "rodzina", "wieś", "inwestycja" → agent **proponuje** zamiast auto-dodawać
+   - Nowa sekcja `<detected_hints>` w discovery.j2
+
+4. **Auto-fallback przy 0 wyników**
+   - Rozszerzona diagnostyka: testuje ALL filtry (quietness, nature, density, accessibility, area, distances)
+   - Nowa funkcja `_auto_fallback_search()`: poluzowuje blokujący filtr i powtarza
+   - Informuje usera: "Zmieniłem X na Y, znalazłem Z działek"
+
+5. **Checkpoint searches** - nowe narzędzie `count_matching_parcels_quick`
+   - Agent pokazuje: "Na tym etapie mam już **X działek** pasujących do Twoich kryteriów"
+   - Użytkownik widzi wpływ każdego parametru w czasie rzeczywistym
+
+**Pliki zmienione:**
+- `backend/app/engine/tool_executor.py` - główne zmiany (wagi, auto-fallback, checkpoint tool)
+- `backend/app/engine/tools_registry.py` - usunięto charakter_terenu, dodano count_matching_parcels_quick
+- `backend/app/memory/logic/manager.py` - rozszerzone keywords + hinty
+- `backend/app/skills/templates/discovery.j2` - detected_hints + checkpoint_hint
+- `backend/app/services/graph_service.py` - cleanup
+
+---
 
 ### 2026-01-24: Uproszczony styl konwersacji + naprawiony skill routing
 
