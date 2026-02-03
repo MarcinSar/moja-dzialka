@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { X, School, Bus, TreePine, Droplets, ShoppingCart, Pill, Loader2, Send, CheckCircle } from 'lucide-react';
+import { X, School, Bus, TreePine, Droplets, ShoppingCart, Pill, Loader2, Send, CheckCircle, MapPin, ChevronDown } from 'lucide-react';
 import { useDetailsPanelStore, type MapLayer, type ParcelData } from '@/stores/detailsPanelStore';
+import { NeighborhoodAnalysis } from './NeighborhoodAnalysis';
 
 // Map layer configurations
 const MAP_LAYERS: Record<MapLayer, { name: string; url: string; attribution: string }> = {
@@ -98,6 +99,9 @@ export function ParcelDetailsPanel() {
 
                 {/* POG (Planning) */}
                 {parcelData.has_pog && <PogSection parcelData={parcelData} />}
+
+                {/* Neighborhood Analysis (Premium) */}
+                <NeighborhoodSection parcelId={parcelData.id_dzialki} />
 
                 {/* Lead capture form */}
                 <LeadCaptureSection parcelId={parcelData.id_dzialki} />
@@ -456,6 +460,52 @@ function PogSection({ parcelData }: { parcelData: ParcelData }) {
           {parcelData.is_residential_zone ? 'TAK' : 'NIE'}
         </span>
       </div>
+    </div>
+  );
+}
+
+// Neighborhood Analysis section (collapsible)
+function NeighborhoodSection({ parcelId }: { parcelId: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <div className="rounded-xl bg-white/5 overflow-hidden">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between p-4 text-left hover:bg-white/5 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500/20 to-cyan-500/20 flex items-center justify-center">
+            <MapPin className="w-5 h-5 text-sky-400" />
+          </div>
+          <div>
+            <h3 className="font-medium text-white">Analiza okolicy</h3>
+            <p className="text-sm text-slate-400">Premium - szczegółowa ocena otoczenia</p>
+          </div>
+        </div>
+        <motion.div
+          animate={{ rotate: isExpanded ? 180 : 0 }}
+          className="text-slate-400"
+        >
+          <ChevronDown className="w-5 h-5" />
+        </motion.div>
+      </button>
+
+      <AnimatePresence>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="p-4 pt-0">
+              <NeighborhoodAnalysis parcelId={parcelId} />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

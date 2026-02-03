@@ -161,6 +161,8 @@ export interface WSToolCallData {
   status: 'started' | 'completed' | 'failed';
   duration_ms?: number;
   result_count?: number;
+  // v3.0: Multi-agent system
+  agent_type?: 'discovery' | 'search' | 'analyst' | 'narrator' | 'feedback' | 'lead' | 'orchestrator';
 }
 
 export interface WSToolResultData {
@@ -168,6 +170,8 @@ export interface WSToolResultData {
   duration_ms?: number;
   result_preview?: string;
   result?: Record<string, unknown>;
+  // v3.0: Multi-agent system
+  agent_type?: 'discovery' | 'search' | 'analyst' | 'narrator' | 'feedback' | 'lead' | 'orchestrator';
 }
 
 export interface MapGeoJSON {

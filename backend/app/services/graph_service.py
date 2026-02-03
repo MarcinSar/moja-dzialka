@@ -142,6 +142,18 @@ class MPZPInfo:
 class GraphService:
     """Service for Neo4j knowledge graph queries."""
 
+    async def run_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Run a raw Cypher query against Neo4j.
+
+        Used by services that need custom queries (e.g., NeighborhoodService).
+        """
+        try:
+            results = await neo4j.run(query, params or {})
+            return results
+        except Exception as e:
+            logger.error(f"Error running query: {e}")
+            return []
+
     async def get_gmina_info(self, gmina_name: str) -> Optional[GminaInfo]:
         """
         Get information about a gmina (city) including statistics.

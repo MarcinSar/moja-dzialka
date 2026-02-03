@@ -31,6 +31,13 @@ from .logic.manager import (
     ALLOWED_TRANSITIONS,
 )
 from .logic.compressor import SessionCompressor
+from .logic.flush import MemoryFlushManager, ExtractedFacts, get_flush_manager
+from .workspace import (
+    WorkspaceManager,
+    UserWorkspace,
+    WorkspaceConfig,
+    get_workspace_manager,
+)
 
 __all__ = [
     # Main state
@@ -50,6 +57,15 @@ __all__ = [
     # Logic
     "MemoryManager",
     "SessionCompressor",
+    # Memory flush
+    "MemoryFlushManager",
+    "ExtractedFacts",
+    "get_flush_manager",
+    # Workspace
+    "WorkspaceManager",
+    "UserWorkspace",
+    "WorkspaceConfig",
+    "get_workspace_manager",
     # Transition validation
     "PhaseTransitionError",
     "ALLOWED_TRANSITIONS",

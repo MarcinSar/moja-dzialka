@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 export type UIPhase = 'discovery' | 'search_results' | 'results' | 'transitioning';
 export type AvatarMood = 'idle' | 'thinking' | 'speaking' | 'excited';
+export type AgentType = 'discovery' | 'search' | 'analyst' | 'narrator' | 'feedback' | 'lead' | 'orchestrator';
 
 interface UIPhaseState {
   phase: UIPhase;
@@ -9,6 +10,10 @@ interface UIPhaseState {
   avatarMood: AvatarMood;
   hasMapData: boolean;
   isTransitioning: boolean;
+
+  // Multi-agent state (v3.0)
+  activeAgentType: AgentType;
+  activeSkill: string | null;
 
   // Spotlight state for hover synchronization
   spotlightParcelId: string | null;
@@ -21,6 +26,7 @@ interface UIPhaseState {
   setAvatarMood: (mood: AvatarMood) => void;
   setHasMapData: (has: boolean) => void;
   setSpotlightParcel: (parcelId: string | null) => void;
+  setActiveAgent: (agentType: AgentType, skill?: string) => void;
 }
 
 export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
@@ -29,6 +35,8 @@ export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
   avatarMood: 'idle',
   hasMapData: false,
   isTransitioning: false,
+  activeAgentType: 'orchestrator',
+  activeSkill: null,
   spotlightParcelId: null,
 
   setPhase: (phase) => set({
@@ -96,4 +104,9 @@ export const useUIPhaseStore = create<UIPhaseState>((set, get) => ({
   setHasMapData: (has) => set({ hasMapData: has }),
 
   setSpotlightParcel: (parcelId) => set({ spotlightParcelId: parcelId }),
+
+  setActiveAgent: (agentType, skill) => set({
+    activeAgentType: agentType,
+    activeSkill: skill || null,
+  }),
 }));

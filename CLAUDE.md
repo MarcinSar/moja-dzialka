@@ -1,17 +1,222 @@
 # CLAUDE.md - Projekt moja-dzialka
 
-## Status: NEO4J V2 PIPELINE ✅ UKOŃCZONY (2026-01-25)
+## Status: AGENT SYSTEM v3.0 ✅ UKOŃCZONY (2026-02-02)
 
-**MAJOR UPDATE:** Pełna przebudowa Neo4j z multi-hop traversals i dual embeddings.
+**MAJOR UPDATE:** Pełna przebudowa systemu agentowego inspirowana wzorcami OpenClaw.
 
-**Nowa architektura:**
-- **171k węzłów** (25 typów) - Parcel, POGZone, kategorie własności/zabudowy/rozmiaru
-- **5.94M relacji** (26 typów) - HAS_*, NEAR_*, LOCATED_IN, ADJACENT_TO
-- **Dual embeddings** - Text (512-dim) + Graph (256-dim via FastRP)
-- **GraphRAG ready** - vector search + graph traversal
-- **Neo4j GDS 2.5.6** - zainstalowany dla graph analytics
+**Nowa architektura v3.0:**
+- **Multi-Agent System** - 6 wyspecjalizowanych sub-agentów (Discovery, Search, Analyst, Narrator, Feedback, Lead)
+- **Hybrid Memory** - 5-tier (Immediate/Redis/PostgreSQL/Files/Neo4j) + Memory Flush
+- **SKILL.md Format** - deklaratywne definicje skills z YAML frontmatter i gates
+- **Tool Schema V3** - reliability scores, cost indicators, composition hints
+- **Premium Services** - Neighborhood Analysis, 3D Terrain (LiDAR skeleton)
+- **Feedback Learning** - re-ranking based on favorites/rejections
 
-**Skrypty pipeline v2:** `egib/scripts/pipeline/21-27_*.py`
+**Poprzednie updaty:**
+- **2026-01-25:** Neo4j v2 Pipeline - 171k węzłów, 5.94M relacji, dual embeddings
+- **Skrypty pipeline:** `egib/scripts/pipeline/21-27_*.py`
+
+---
+
+## Agent System v3.0 Architecture ✅ NOWE (2026-02-02)
+
+### Multi-Agent System
+
+```
+                              USER MESSAGE
+                                   │
+                                   ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ROOT ORCHESTRATOR AGENT                               │
+│                     Model: Sonnet 4 (configurable)                          │
+│                                                                              │
+│  - Parse intent, routing, synthesis                                         │
+│  - Maintain conversation personality                                        │
+│  - Tools: spawn_agent, await_agent, synthesize_response                     │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         │                     │                     │
+         ▼                     ▼                     ▼
+┌────────────────┐    ┌────────────────┐    ┌────────────────┐
+│   DISCOVERY    │    │    SEARCH      │    │    ANALYST     │
+│  Model: Haiku  │    │   Model: Haiku │    │  Model: Sonnet │
+│   7 tools      │    │   12 tools     │    │   8 tools      │
+└────────────────┘    └────────────────┘    └────────────────┘
+
+┌────────────────┐    ┌────────────────┐    ┌────────────────┐
+│   NARRATOR     │    │   FEEDBACK     │    │     LEAD       │
+│  Model: Sonnet │    │  Model: Haiku  │    │   Model: Haiku │
+│   4 tools      │    │   6 tools      │    │   3 tools      │
+└────────────────┘    └────────────────┘    └────────────────┘
+```
+
+**Kluczowe pliki:**
+| Komponent | Lokalizacja | Opis |
+|-----------|-------------|------|
+| SubAgentSpawner | `backend/app/engine/sub_agents.py` | Spawner + AgentRouter |
+| PropertyAdvisorAgent | `backend/app/engine/property_advisor_agent.py` | Root Orchestrator |
+| AgentCoordinator | `backend/app/engine/agent_coordinator.py` | Session management |
+
+### Memory Architecture (5-Tier)
+
+```
+TIER 1: Immediate (in-memory)     │ Working state, current session
+TIER 2: Hot (Redis, <10ms)        │ Active sessions, user profiles
+TIER 3: Warm (PostgreSQL, <100ms) │ Full state, analytics, leads
+TIER 4: Cold (Files, <500ms)      │ Session archives, patterns, logs
+TIER 5: Knowledge (Neo4j+SQLite)  │ 155k parcels, embeddings
+```
+
+**Memory Flush Flow:**
+```
+Token count > 80% limit
+        │
+        ▼
+Silent Haiku turn (extract facts)
+        │
+        ├─► Write to users/{id}/profile.md
+        ├─► Append to memory/{date}.md
+        └─► Update Redis cache
+        │
+        ▼
+Continue or hard compact
+```
+
+**Kluczowe pliki:**
+| Komponent | Lokalizacja | Opis |
+|-----------|-------------|------|
+| MemoryFlushManager | `backend/app/memory/logic/flush.py` | LLM-powered extraction |
+| WorkspaceManager | `backend/app/memory/workspace.py` | File-based storage (~/.parcela/) |
+| 7-Layer Memory | `backend/app/memory/schemas/*.py` | Core, Working, Semantic, etc. |
+
+### Skills v3 (SKILL.md Format)
+
+Skills definiowane są w plikach markdown z YAML frontmatter:
+
+```yaml
+---
+name: discovery
+description: Zbieranie preferencji użytkownika
+version: "1.0"
+
+gates:
+  requires: []
+  requires_any:
+    - phase:DISCOVERY
+    - intent:discovery
+  blocks:
+    - has:payment_required
+
+tools:
+  always_available:
+    - resolve_location
+    - get_available_locations
+  context_available:
+    - propose_search_preferences
+  restricted:
+    - execute_search
+
+transitions:
+  on_success: search
+  on_failure: null
+  on_user_request:
+    - search
+    - evaluation
+
+model:
+  default: haiku
+  upgrade_on_complexity: true
+---
+
+# Discovery Skill Instructions
+[Markdown body with detailed instructions...]
+```
+
+**Dostępne skills:**
+| Skill | Opis | Model |
+|-------|------|-------|
+| discovery | Zbieranie preferencji | Haiku |
+| search | Wykonywanie wyszukiwań | Haiku |
+| evaluation | Analiza i porównania | Sonnet |
+| narrator | Opisy i narracje | Sonnet |
+| market_analysis | Analiza rynku | Sonnet |
+| lead_capture | Zbieranie kontaktów | Haiku |
+
+**Kluczowe pliki:**
+| Komponent | Lokalizacja | Opis |
+|-----------|-------------|------|
+| SkillLoader | `backend/app/skills/loader.py` | Parser SKILL.md |
+| GateEvaluator | `backend/app/skills/loader.py` | Validation gates |
+| Skill definitions | `backend/app/skills/definitions/*.md` | 6 SKILL.md files |
+
+### Tool Schema V3
+
+```python
+class ToolDefinitionV3:
+    name: str
+    description: str
+    input_schema: Dict[str, Any]
+    reliability: ReliabilityScore  # HIGH, MEDIUM, LOW
+    cost: CostIndicator           # FREE, CHEAP, MODERATE, EXPENSIVE, PREMIUM
+    policies: List[PolicyTag]     # FREEMIUM, PREMIUM_ONLY, PHASE_*
+    natural_triggers: List[str]   # "szukam działki", "znajdź działkę"
+    composition: CompositionHint  # before, after, combines_with
+```
+
+**Policy Stack (future freemium):**
+```
+Request → GuardPolicy → PhasePolicy → FreemiumPolicy → RateLimit → EXECUTE
+```
+
+**Kluczowe pliki:**
+| Komponent | Lokalizacja | Opis |
+|-----------|-------------|------|
+| ToolDefinitionV3 | `backend/app/engine/tool_schema_v3.py` | V3 schema |
+| PolicyStack | `backend/app/engine/tool_policies.py` | Policy engine |
+| ToolRegistryV3 | `backend/app/engine/tool_schema_v3.py` | V3 registry |
+
+### Premium Services
+
+**Neighborhood Analysis:**
+```python
+# backend/app/services/neighborhood_service.py
+async def analyze_neighborhood(parcel_id: str, radius_m: int = 500):
+    """Comprehensive neighborhood assessment including:
+    - Character (urban/suburban/rural)
+    - Density metrics
+    - Transport/amenities scores
+    - Strengths/weaknesses
+    - Ideal use cases
+    """
+```
+
+**3D Terrain (skeleton):**
+```python
+# backend/app/services/terrain_3d_service.py
+async def get_terrain_for_parcel(parcel_id: str, quality: TerrainQuality):
+    """LiDAR-based terrain visualization:
+    - Elevation grid from GUGiK NMT
+    - Slope/aspect analysis
+    - Building suitability assessment
+    Note: Requires GUGiK API integration for production
+    """
+```
+
+### Feedback Learning
+
+```python
+# backend/app/services/feedback_learning.py
+class FeedbackLearningService:
+    def rerank_results(self, results, state, boost_factor=1.5, penalty_factor=0.6):
+        """Re-rank based on similarity to favorites/rejections"""
+
+    def extract_preference_patterns(self, state):
+        """Extract patterns from user feedback"""
+
+    def save_feedback_to_workspace(self, state):
+        """Persist patterns to user workspace"""
+```
 
 ---
 
@@ -571,13 +776,37 @@ DISCOVERY → SEARCH → EVALUATION → NEGOTIATION → LEAD_CAPTURE
 moja-dzialka/
 ├── backend/                    # FastAPI backend
 │   └── app/
-│       ├── agent/              # Legacy agent (v1)
 │       ├── api/                # REST + WebSocket
-│       ├── engine/             # AgentCoordinator, PropertyAdvisorAgent
+│       ├── engine/             # v3.0 Agent System
+│       │   ├── agent_coordinator.py    # Session management
+│       │   ├── property_advisor_agent.py # Root Orchestrator
+│       │   ├── sub_agents.py           # SubAgentSpawner + Router
+│       │   ├── tool_schema_v3.py       # V3 tool definitions
+│       │   ├── tool_policies.py        # Policy stack
+│       │   ├── tools_registry.py       # 33+ tools
+│       │   └── tool_executor.py        # Tool implementations
 │       ├── memory/             # 7-warstwowy model pamięci
+│       │   ├── schemas/        # Core, Working, Semantic, etc.
+│       │   ├── logic/          # Manager, flush.py (NEW)
+│       │   ├── templates/      # Jinja2 prompts
+│       │   └── workspace.py    # File-based storage (NEW)
 │       ├── persistence/        # Redis + PostgreSQL
-│       ├── services/           # graph_service, embedding_service
-│       └── skills/             # Skills registry
+│       ├── services/           # Domain services
+│       │   ├── graph_service.py        # Neo4j queries
+│       │   ├── embedding_service.py    # sentence-transformers
+│       │   ├── neighborhood_service.py # Neighborhood analysis (NEW)
+│       │   ├── terrain_3d_service.py   # 3D terrain (NEW)
+│       │   └── feedback_learning.py    # Re-ranking (NEW)
+│       └── skills/             # Skills v3
+│           ├── loader.py       # SkillLoader + GateEvaluator
+│           ├── _base.py        # Base classes
+│           └── definitions/    # SKILL.md files
+│               ├── discovery.md
+│               ├── search.md
+│               ├── evaluation.md
+│               ├── narrator.md
+│               ├── market_analysis.md
+│               └── lead_capture.md
 ├── frontend/                   # React + Vite + Tailwind
 ├── data/
 │   └── ready-for-import/       # Dane do importu (488 MB)
@@ -640,6 +869,54 @@ services:
 ---
 
 ## Changelog
+
+### 2026-02-02: Agent System v3.0 ✅ MAJOR
+
+**Cel:** Przebudowa systemu agentowego inspirowana wzorcami OpenClaw.
+
+**Nowe komponenty:**
+
+1. **Multi-Agent System (`backend/app/engine/sub_agents.py`):**
+   - SubAgentSpawner - spawnowanie wyspecjalizowanych agentów
+   - AgentRouter - routing intencji do właściwego agenta
+   - 6 typów agentów: Discovery, Search, Analyst, Narrator, Feedback, Lead
+   - Konfigurowalny model (Haiku/Sonnet) per agent
+
+2. **Memory Flush (`backend/app/memory/logic/flush.py`):**
+   - MemoryFlushManager z LLM-powered extraction (Haiku)
+   - Automatyczne zapisywanie faktów przed kompakcją kontekstu
+   - Rule-based fallback dla prostych wzorców
+
+3. **Workspace Manager (`backend/app/memory/workspace.py`):**
+   - File-based storage w ~/.parcela/users/{id}/
+   - Profile.md (profil kupującego)
+   - Sessions/ (historia sesji)
+   - Memory/ (wyekstrahowane fakty)
+
+4. **Skills v3 (`backend/app/skills/`):**
+   - SKILL.md format z YAML frontmatter
+   - SkillLoader parser
+   - GateEvaluator dla walidacji aktywacji
+   - 6 deklaratywnych definicji skills
+
+5. **Tool Schema V3 (`backend/app/engine/tool_schema_v3.py`):**
+   - ToolDefinitionV3 z reliability, cost, policies
+   - Natural language triggers
+   - Composition hints (before/after/combines_with)
+   - ToolRegistryV3 z policy-based filtering
+
+6. **Premium Services:**
+   - NeighborhoodService - analiza okolicy
+   - Terrain3DService - wizualizacja 3D (skeleton)
+   - FeedbackLearningService - re-ranking
+
+**Usunięte (legacy cleanup):**
+- `backend/app/agent/` - backwards compat shim
+- `backend/app/skills/discovery.py` etc. - Python skill classes
+- `backend/app/skills/templates/` - Jinja templates
+- `backend/app/engine/tools_registry_v2.py` - unused
+
+---
 
 ### 2026-01-25: Neo4j v2 Pipeline ✅ MAJOR
 
@@ -741,16 +1018,23 @@ services:
 7. [x] **Neo4j GDS installation** (FastRP graph embeddings)
 8. [x] **Adjacency relations** (407,825 ADJACENT_TO, avg 33.8m border)
 9. [x] **Agent Neo4j v2 Integration** (nowe filtry, narzędzia grafowe)
+10. [x] **Agent System v3.0** - Multi-agent, Memory Flush, Skills v3, Tool Schema v3
+11. [x] **Premium Services** - Neighborhood Analysis, 3D Terrain skeleton, Feedback Learning
+12. [x] **Legacy Cleanup** - usunięcie nieużywanych komponentów
 
 ### Do zrobienia 📋
-10. [ ] Testy E2E wyszukiwania przez agenta
-11. [ ] Deploy na serwer produkcyjny (Hetzner)
-12. [ ] Migracja frontendu na API v2
-13. [ ] Integracja płatności (Stripe)
-14. [ ] Lead capture UI + analytics
-15. [ ] Community detection (Louvain) dla rekomendacji
-16. [ ] Monitoring (Grafana + Prometheus)
+13. [ ] **Frontend v3** - aktualizacja UI do obsługi wszystkich funkcji agenta
+    - Multi-agent responses display
+    - Feedback controls (favorites/rejections)
+    - Premium feature indicators
+    - Neighborhood analysis visualization
+14. [ ] Testy E2E wyszukiwania przez agenta
+15. [ ] Deploy na serwer produkcyjny (Hetzner)
+16. [ ] Integracja płatności (Stripe)
+17. [ ] Lead capture UI + analytics
+18. [ ] Community detection (Louvain) dla rekomendacji
+19. [ ] Monitoring (Grafana + Prometheus)
 
 ---
 
-*Ostatnia aktualizacja: 2026-01-25 21:30 UTC*
+*Ostatnia aktualizacja: 2026-02-02 17:10 UTC*

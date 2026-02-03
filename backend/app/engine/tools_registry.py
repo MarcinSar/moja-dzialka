@@ -1187,6 +1187,221 @@ find_similar_by_graph(parcel_id="220611_2.0001.1234")
             "required": ["parcel_id"]
         }
     },
+    # ─── V3 Sub-Agent Tools ──────────────────────────────────────
+    {
+        "name": "search_by_criteria",
+        "description": """
+Wyszukaj działki przez zaawansowane kryteria Neo4j (graph traversal).
+Używa multi-hop queries po relacjach grafu.
+
+KIEDY UŻYWAĆ:
+- User podaje złożone kryteria filtrowania (własność + zabudowa + rozmiar)
+- Potrzebne jest precyzyjne filtrowanie po atrybutach grafowych
+- Po zatwierdzeniu preferencji, jako uzupełnienie execute_search
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ownership_type": {
+                    "type": "string",
+                    "enum": ["prywatna", "publiczna", "spoldzielcza", "koscielna", "inna"],
+                    "description": "Typ własności"
+                },
+                "build_status": {
+                    "type": "string",
+                    "enum": ["zabudowana", "niezabudowana"],
+                    "description": "Status zabudowy"
+                },
+                "size_category": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["mala", "pod_dom", "duza", "bardzo_duza"]},
+                    "description": "Kategorie wielkości"
+                },
+                "district": {
+                    "type": "string",
+                    "description": "Nazwa dzielnicy"
+                },
+                "city": {
+                    "type": "string",
+                    "description": "Miasto (Gdańsk, Gdynia, Sopot)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maks. wyników (domyślnie 20)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "refine_search_preferences",
+        "description": """
+Modyfikuj preferencje wyszukiwania na podstawie feedbacku użytkownika.
+Zachowuje istniejące preferencje i aktualizuje tylko wskazane pola.
+
+KIEDY UŻYWAĆ:
+- User mówi "chcę większe działki" lub "bliżej lasu"
+- Po obejrzeniu wyników user chce zmienić kryteria
+- Iteracyjne doprecyzowywanie wyszukiwania
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "object",
+                    "description": "Pola do aktualizacji (np. {\"min_area_m2\": 1000, \"quietness_categories\": [\"bardzo_cicha\"]})"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Powód zmiany (dla kontekstu)"
+                }
+            },
+            "required": ["updates"]
+        }
+    },
+    {
+        "name": "compare_parcels",
+        "description": """
+Porównaj dwie lub więcej działek side-by-side.
+Generuje tabelę porównawczą z kluczowymi atrybutami.
+
+KIEDY UŻYWAĆ:
+- User pyta "która lepsza?" lub "porównaj te działki"
+- User wahá się między kilkoma opcjami
+- Potrzeba zestawienia trade-offów
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Lista ID działek do porównania (2-5)"
+                },
+                "criteria": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Kryteria do porównania (np. [\"area\", \"quietness\", \"nature\", \"price\"])"
+                }
+            },
+            "required": ["parcel_ids"]
+        }
+    },
+    {
+        "name": "get_zoning_info",
+        "description": """
+Pobierz szczegółowe informacje o strefie planistycznej (POG/MPZP) dla działki.
+Zawiera dozwolone profile zabudowy, maksymalną wysokość, pokrycie.
+
+KIEDY UŻYWAĆ:
+- User pyta o plan zagospodarowania
+- User chce wiedzieć co może budować na działce
+- Potrzeba informacji o strefie planistycznej
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "parcel_id": {
+                    "type": "string",
+                    "description": "ID działki"
+                }
+            },
+            "required": ["parcel_id"]
+        }
+    },
+    {
+        "name": "market_analysis",
+        "description": """
+Analiza rynkowa dla lokalizacji lub działki.
+Zwraca zakres cen, trendy, porównanie z okolicą.
+
+KIEDY UŻYWAĆ:
+- User pyta o ceny w danej lokalizacji
+- User chce wiedzieć czy cena jest dobra
+- Potrzeba kontekstu rynkowego
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "Lokalizacja (dzielnica lub miasto)"
+                },
+                "parcel_id": {
+                    "type": "string",
+                    "description": "Opcjonalnie: ID działki do analizy"
+                },
+                "area_m2": {
+                    "type": "number",
+                    "description": "Opcjonalnie: metraż do wyceny"
+                }
+            },
+            "required": ["location"]
+        }
+    },
+    {
+        "name": "propose_filter_refinement",
+        "description": """
+Zaproponuj udoskonalenie filtrów na podstawie wzorców feedbacku użytkownika.
+Analizuje polubione/odrzucone działki i sugeruje lepsze kryteria.
+
+KIEDY UŻYWAĆ:
+- User polubił lub odrzucił kilka działek
+- Wyniki nie w pełni odpowiadają oczekiwaniom
+- Potrzeba automatycznego dostrojenia filtrów
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "favorited_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "ID polubionych działek"
+                },
+                "rejected_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "ID odrzuconych działek"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "capture_contact_info",
+        "description": """
+Zbierz dane kontaktowe użytkownika zainteresowanego zakupem.
+Zapisuje email/telefon z kontekstem zainteresowania.
+
+KIEDY UŻYWAĆ:
+- User wyraża chęć kontaktu lub zakupu
+- User prosi o wysłanie wyników na email
+- Faza lead_capture konwersacji
+""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email": {
+                    "type": "string",
+                    "description": "Adres email"
+                },
+                "phone": {
+                    "type": "string",
+                    "description": "Numer telefonu"
+                },
+                "interest_description": {
+                    "type": "string",
+                    "description": "Opis zainteresowania"
+                },
+                "parcel_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Działki, którymi się interesuje"
+                }
+            },
+            "required": []
+        }
+    },
 ]
 
 

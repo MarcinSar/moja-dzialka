@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     app_secret_key: str = "change-me-in-production"
     cors_origins_str: str = '["http://localhost:3000"]'
     debug: bool = False
+    persistence_backend: str = "memory"
 
     @property
     def cors_origins(self) -> List[str]:

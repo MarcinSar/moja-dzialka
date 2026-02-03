@@ -166,6 +166,26 @@ class ToolExecutor:
             elif tool_name == "find_similar_by_graph":
                 result = await self._find_similar_by_graph(params)
                 return result, {}
+            # V3 Sub-Agent Tools (2026-02-03)
+            elif tool_name == "search_by_criteria":
+                result = await self._search_by_criteria(params)
+                return result, {}
+            elif tool_name == "refine_search_preferences":
+                return await self._refine_search_preferences(params)
+            elif tool_name == "compare_parcels":
+                result = await self._compare_parcels(params)
+                return result, {}
+            elif tool_name == "get_zoning_info":
+                result = await self._get_zoning_info(params)
+                return result, {}
+            elif tool_name == "market_analysis":
+                result = await self._market_analysis(params)
+                return result, {}
+            elif tool_name == "propose_filter_refinement":
+                result = await self._propose_filter_refinement(params)
+                return result, {}
+            elif tool_name == "capture_contact_info":
+                return await self._capture_contact_info(params)
             else:
                 return {"error": f"Unknown tool: {tool_name}"}, {}
 
@@ -2205,6 +2225,274 @@ class ToolExecutor:
         except Exception as e:
             logger.error(f"Find similar by graph error: {e}")
             return {"error": str(e)}
+
+    # =========================================================================
+    # V3 SUB-AGENT TOOLS (2026-02-03)
+    # =========================================================================
+
+    async def _search_by_criteria(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Search parcels by advanced Neo4j graph criteria."""
+        try:
+            criteria = {}
+            if params.get("ownership_type"):
+                criteria["ownership_type"] = params["ownership_type"]
+            if params.get("build_status"):
+                criteria["build_status"] = params["build_status"]
+            if params.get("size_category"):
+                criteria["size_category"] = params["size_category"]
+            if params.get("district"):
+                criteria["district"] = params["district"]
+            if params.get("city"):
+                criteria["city"] = params["city"]
+
+            limit = params.get("limit", 20)
+
+            # Build Cypher query dynamically
+            match_clauses = ["MATCH (p:Parcel)"]
+            where_clauses = []
+            query_params: Dict[str, Any] = {"limit": limit}
+
+            if criteria.get("ownership_type"):
+                match_clauses.append("MATCH (p)-[:HAS_OWNERSHIP]->(o:OwnershipType {id: $ownership})")
+                query_params["ownership"] = criteria["ownership_type"]
+            if criteria.get("build_status"):
+                match_clauses.append("MATCH (p)-[:HAS_BUILD_STATUS]->(bs:BuildStatus {id: $build_status})")
+                query_params["build_status"] = criteria["build_status"]
+            if criteria.get("size_category"):
+                match_clauses.append("MATCH (p)-[:HAS_SIZE]->(sz:SizeCategory)")
+                where_clauses.append("sz.id IN $size_cats")
+                query_params["size_cats"] = criteria["size_category"]
+            if criteria.get("district"):
+                match_clauses.append("MATCH (p)-[:LOCATED_IN]->(d:District)")
+                where_clauses.append("d.name CONTAINS $district")
+                query_params["district"] = criteria["district"]
+            if criteria.get("city"):
+                where_clauses.append("p.gmina = $city")
+                query_params["city"] = criteria["city"]
+
+            where_str = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+            query = "\n".join(match_clauses) + where_str + """
+                RETURN p.id_dzialki as id, p.gmina as gmina, p.dzielnica as dzielnica,
+                       p.area_m2 as area_m2, p.quietness_score as quietness_score,
+                       p.nature_score as nature_score, p.centroid_lat as lat, p.centroid_lon as lon
+                ORDER BY p.quietness_score DESC
+                LIMIT $limit
+            """
+
+            results = await graph_service.run_query(query, query_params)
+            return {
+                "count": len(results),
+                "parcels": results,
+                "criteria_used": criteria,
+            }
+        except Exception as e:
+            logger.error(f"Search by criteria error: {e}")
+            return {"error": str(e)}
+
+    async def _refine_search_preferences(self, params: Dict[str, Any]) -> ToolResult:
+        """Refine existing search preferences with updates."""
+        updates = params.get("updates", {})
+        reason = params.get("reason", "")
+
+        state_updates = {}
+        for key, value in updates.items():
+            state_updates[f"search_state.perceived_preferences.{key}"] = value
+
+        return {
+            "status": "preferences_refined",
+            "updates_applied": list(updates.keys()),
+            "reason": reason,
+            "message": f"Zaktualizowano {len(updates)} parametrów wyszukiwania",
+        }, state_updates
+
+    async def _compare_parcels(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Compare multiple parcels side-by-side."""
+        parcel_ids = params.get("parcel_ids", [])
+        if len(parcel_ids) < 2:
+            return {"error": "Potrzebuję minimum 2 działek do porównania"}
+
+        try:
+            parcels = []
+            for pid in parcel_ids[:5]:  # Max 5
+                resolved = self._resolve_parcel_reference(pid)
+                if not resolved:
+                    continue
+                details = await spatial_service.get_parcel_details(resolved, include_geometry=False)
+                if details:
+                    parcels.append(details)
+
+            if len(parcels) < 2:
+                return {"error": "Nie udało się pobrać danych dla wystarczającej liczby działek"}
+
+            return {
+                "count": len(parcels),
+                "parcels": parcels,
+                "comparison_ready": True,
+                "message": f"Porównanie {len(parcels)} działek",
+            }
+        except Exception as e:
+            logger.error(f"Compare parcels error: {e}")
+            return {"error": str(e)}
+
+    async def _get_zoning_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Get detailed zoning/POG information for a parcel."""
+        raw_ref = params.get("parcel_id", "")
+        parcel_id = self._resolve_parcel_reference(raw_ref)
+        if not parcel_id:
+            return {"error": f"Nie rozpoznano działki: {raw_ref}"}
+
+        try:
+            query = """
+                MATCH (p:Parcel {id_dzialki: $pid})
+                OPTIONAL MATCH (p)-[:HAS_POG]->(z:POGZone)
+                OPTIONAL MATCH (z)-[:ALLOWS_PROFILE]->(pr:POGProfile)
+                RETURN p.id_dzialki as id, p.pog_symbol as pog_symbol,
+                       z.symbol as zone_symbol, z.name as zone_name,
+                       z.is_residential as is_residential,
+                       z.max_height_m as max_height,
+                       z.max_coverage_pct as max_coverage,
+                       z.min_bio_pct as min_bio,
+                       collect(DISTINCT pr.name) as allowed_profiles
+            """
+            results = await graph_service.run_query(query, {"pid": parcel_id})
+            if not results:
+                return {"parcel_id": parcel_id, "has_zoning": False, "message": "Brak danych planistycznych"}
+
+            r = results[0]
+            return {
+                "parcel_id": parcel_id,
+                "has_zoning": r.get("zone_symbol") is not None,
+                "pog_symbol": r.get("pog_symbol"),
+                "zone_symbol": r.get("zone_symbol"),
+                "zone_name": r.get("zone_name"),
+                "is_residential": r.get("is_residential"),
+                "max_height_m": r.get("max_height"),
+                "max_coverage_pct": r.get("max_coverage"),
+                "min_bio_pct": r.get("min_bio"),
+                "allowed_profiles": r.get("allowed_profiles", []),
+            }
+        except Exception as e:
+            logger.error(f"Get zoning info error: {e}")
+            return {"error": str(e)}
+
+    async def _market_analysis(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Market analysis for a location or parcel."""
+        location = params.get("location", "")
+        parcel_id = params.get("parcel_id")
+        area_m2 = params.get("area_m2")
+
+        try:
+            # Use hardcoded price data (keys are (city, district) tuples)
+            from app.engine.price_data import DISTRICT_PRICES
+            price_info = None
+            matched_key = None
+
+            # Try direct lookup with common cities
+            for city in ["Gdańsk", "Gdynia", "Sopot"]:
+                key = (city, location)
+                if key in DISTRICT_PRICES:
+                    price_info = DISTRICT_PRICES[key]
+                    matched_key = key
+                    break
+
+            # Fuzzy match if not found
+            if not price_info:
+                loc_lower = location.lower()
+                for (city, district), info in DISTRICT_PRICES.items():
+                    if district and loc_lower in district.lower():
+                        price_info = info
+                        matched_key = (city, district)
+                        break
+
+            result: Dict[str, Any] = {
+                "location": location,
+                "matched": f"{matched_key[0]}, {matched_key[1]}" if matched_key else None,
+                "price_range": price_info if price_info else "Brak danych cenowych dla tej lokalizacji",
+            }
+
+            if area_m2 and price_info:
+                min_price = price_info.get("min", 0) * area_m2
+                max_price = price_info.get("max", 0) * area_m2
+                result["estimated_value"] = {
+                    "min_pln": round(min_price),
+                    "max_pln": round(max_price),
+                    "area_m2": area_m2,
+                }
+
+            return result
+        except Exception as e:
+            logger.error(f"Market analysis error: {e}")
+            return {"error": str(e)}
+
+    async def _propose_filter_refinement(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Propose filter refinements based on user feedback patterns."""
+        favorited = params.get("favorited_ids", [])
+        rejected = params.get("rejected_ids", [])
+
+        if not favorited and not rejected:
+            return {"message": "Brak danych o preferencjach do analizy", "suggestions": []}
+
+        try:
+            suggestions = []
+
+            # Analyze favorited parcels for common patterns
+            if favorited:
+                fav_query = """
+                    MATCH (p:Parcel) WHERE p.id_dzialki IN $ids
+                    RETURN avg(p.area_m2) as avg_area,
+                           avg(p.quietness_score) as avg_quiet,
+                           avg(p.nature_score) as avg_nature,
+                           collect(DISTINCT p.dzielnica) as districts
+                """
+                fav_results = await graph_service.run_query(fav_query, {"ids": favorited})
+                if fav_results:
+                    r = fav_results[0]
+                    if r.get("avg_area"):
+                        suggestions.append({
+                            "field": "area_m2",
+                            "suggestion": f"Preferowana powierzchnia ok. {round(r['avg_area'])} m²",
+                            "value": round(r["avg_area"]),
+                        })
+                    if r.get("districts"):
+                        suggestions.append({
+                            "field": "districts",
+                            "suggestion": f"Preferowane dzielnice: {', '.join(r['districts'])}",
+                            "value": r["districts"],
+                        })
+
+            return {
+                "suggestions": suggestions,
+                "based_on": {"favorited": len(favorited), "rejected": len(rejected)},
+            }
+        except Exception as e:
+            logger.error(f"Propose filter refinement error: {e}")
+            return {"error": str(e)}
+
+    async def _capture_contact_info(self, params: Dict[str, Any]) -> ToolResult:
+        """Capture user contact information as a lead."""
+        email = params.get("email")
+        phone = params.get("phone")
+        interest = params.get("interest_description", "")
+        parcel_ids = params.get("parcel_ids", [])
+
+        if not email and not phone:
+            return {"error": "Potrzebuję przynajmniej email lub telefon"}, {}
+
+        lead_data = {
+            "email": email,
+            "phone": phone,
+            "interest": interest,
+            "parcel_ids": parcel_ids,
+            "captured": True,
+        }
+
+        logger.info(f"Lead captured: email={email}, phone={phone}, parcels={len(parcel_ids)}")
+
+        return {
+            "status": "lead_captured",
+            "message": "Dziękuję! Dane kontaktowe zapisane.",
+            "lead": lead_data,
+        }, {"contact_captured": True}
 
 
 # =============================================================================

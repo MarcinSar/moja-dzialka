@@ -17,6 +17,7 @@ from app.api.conversation_v2 import router as conversation_router
 from app.api.search import router as search_router
 from app.api.lidar import router as lidar_router
 from app.api.leads import router as leads_router
+from app.api.feedback import router as feedback_router
 
 
 @asynccontextmanager
@@ -66,6 +67,7 @@ app.include_router(conversation_router, prefix="/api")  # /api/v2/conversation
 app.include_router(search_router, prefix="/api/v1")     # Search stays at v1 (no changes needed)
 app.include_router(lidar_router, prefix="/api/v1")      # LiDAR stays at v1
 app.include_router(leads_router, prefix="/api/v1")      # Leads at v1
+app.include_router(feedback_router, prefix="/api/v1")   # Feedback v3.0 (v1 URL)
 
 
 # =============================================================================
@@ -118,11 +120,17 @@ async def api_info():
                 "search": "POST /api/v1/search/",
                 "similar": "GET /api/v1/search/similar/{parcel_id}",
                 "parcel": "GET /api/v1/search/parcel/{parcel_id}",
+                "neighborhood": "GET /api/v1/search/neighborhood/{parcel_id}",  # v3.0
                 "map": "POST /api/v1/search/map",
                 "gminy": "GET /api/v1/search/gminy",
                 "gmina": "GET /api/v1/search/gmina/{name}",
                 "mpzp_symbols": "GET /api/v1/search/mpzp-symbols",
                 "stats": "GET /api/v1/search/stats",
+            },
+            "feedback": {  # v3.0
+                "submit": "POST /api/v1/feedback/{parcel_id}",
+                "history": "GET /api/v1/feedback/history",
+                "clear": "DELETE /api/v1/feedback/",
             },
             "lidar": {
                 "request": "POST /api/v1/lidar/request",

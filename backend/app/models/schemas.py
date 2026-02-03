@@ -256,6 +256,114 @@ class LeadResponse(BaseModel):
 
 
 # =============================================================================
+# NEIGHBORHOOD ANALYSIS (v3.0)
+# =============================================================================
+
+class NeighborhoodPOI(BaseModel):
+    """Point of interest near a parcel."""
+    type: str  # school, bus_stop, shop
+    name: Optional[str] = None
+    distance_m: float
+
+
+class NeighborhoodCharacter(BaseModel):
+    """Neighborhood character assessment."""
+    type: str  # urban, suburban, rural, transitional
+    description: str
+
+
+class NeighborhoodDensity(BaseModel):
+    """Density metrics for neighborhood."""
+    building_pct: float
+    residential_pct: float
+    avg_parcel_size_m2: Optional[float] = None
+
+
+class NeighborhoodEnvironment(BaseModel):
+    """Environmental metrics."""
+    quietness_score: float
+    nature_score: float
+    accessibility_score: float
+
+
+class NeighborhoodScores(BaseModel):
+    """Composite neighborhood scores."""
+    transport: float
+    amenities: float
+    overall_livability: float
+
+
+class NeighborhoodNeighbors(BaseModel):
+    """Info about neighboring parcels."""
+    adjacent_count: int
+    adjacent_parcels: List[Dict[str, Any]] = []
+    nearby_poi_count: int
+
+
+class NeighborhoodAssessment(BaseModel):
+    """Human-readable assessment."""
+    strengths: List[str] = []
+    weaknesses: List[str] = []
+    ideal_for: List[str] = []
+
+
+class NeighborhoodResponse(BaseModel):
+    """Complete neighborhood analysis response."""
+    parcel_id: str
+    district: Optional[str] = None
+    city: Optional[str] = None
+
+    character: NeighborhoodCharacter
+    density: NeighborhoodDensity
+    environment: NeighborhoodEnvironment
+    scores: NeighborhoodScores
+    neighbors: NeighborhoodNeighbors
+    poi: List[NeighborhoodPOI] = []
+    assessment: NeighborhoodAssessment
+    summary: str
+
+    # Premium feature indicator
+    is_premium: bool = True
+
+
+# =============================================================================
+# FEEDBACK (v3.0)
+# =============================================================================
+
+class FeedbackAction(str):
+    """Feedback action types."""
+    FAVORITE = "favorite"
+    REJECT = "reject"
+    VIEW = "view"
+    COMPARE = "compare"
+
+
+class FeedbackRequest(BaseModel):
+    """User feedback on a parcel."""
+    action: str = Field(..., pattern="^(favorite|reject|view|compare)$")
+    session_id: Optional[str] = None
+    context: Optional[Dict[str, Any]] = None  # Additional context like comparison_with
+
+
+class FeedbackResponse(BaseModel):
+    """Response after submitting feedback."""
+    success: bool
+    message: str
+    parcel_id: str
+    action: str
+    patterns_extracted: int = 0  # How many preference patterns were extracted
+
+
+class UserFeedbackHistory(BaseModel):
+    """User's feedback history."""
+    user_id: str
+    favorites: List[str] = []
+    rejections: List[str] = []
+    total_views: int = 0
+    patterns: Dict[str, Any] = {}
+
+
+# =============================================================================
 # HEALTH CHECK
 # =============================================================================
 

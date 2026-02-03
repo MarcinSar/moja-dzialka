@@ -20,11 +20,13 @@ from app.memory import (
     FunnelPhase,
     MemoryManager,
     SessionCompressor,
+    get_flush_manager,
+    get_workspace_manager,
 )
 from app.skills import get_skill, list_skills
 from app.persistence import get_persistence_backend
 
-from .property_advisor_agent import PropertyAdvisorAgent
+from .property_advisor_agent import PropertyAdvisorAgent, get_agent_type_for_skill
 
 
 class AgentCoordinator:
@@ -45,6 +47,8 @@ class AgentCoordinator:
         self.memory_manager = MemoryManager()
         self.session_compressor = SessionCompressor()
         self.executor = PropertyAdvisorAgent()
+        self.flush_manager = get_flush_manager()
+        self.workspace_manager = get_workspace_manager()
 
     async def process_message(
         self,
@@ -73,6 +77,14 @@ class AgentCoordinator:
         }
 
         try:
+            # 1b. Check if memory flush is needed (before adding new message)
+            if self.flush_manager.should_flush(state):
+                logger.info(f"Memory flush triggered for user {user_id}")
+                yield {
+                    "type": "thinking",
+                    "data": {"message": "Zapisuję ważne informacje..."}
+                }
+                await self.flush_manager.flush(state)
             # 2. Add user message to state
             state = self.memory_manager.add_user_message(state, message)
 
@@ -85,9 +97,14 @@ class AgentCoordinator:
                 f"skill={skill_name}"
             )
 
+            agent_type = get_agent_type_for_skill(skill_name)
             yield {
                 "type": "skill_selected",
-                "data": {"skill": skill_name, "phase": state.working.current_phase.value}
+                "data": {
+                    "skill": skill_name,
+                    "phase": state.working.current_phase.value,
+                    "agent_type": agent_type,
+                }
             }
 
             # 4. Execute skill (yields events)
@@ -95,6 +112,25 @@ class AgentCoordinator:
             # and applied in PropertyAdvisorAgent._apply_state_updates()
             async for event in self.executor.execute(skill_name, message, state):
                 yield event
+
+                # Emit activity events for frontend tracking
+                if event["type"] == "tool_call":
+                    tool_name = event["data"].get("tool", "")
+                    yield {
+                        "type": "activity",
+                        "data": {
+                            "action": f"Używam narzędzia: {tool_name}",
+                            "details": f"Skill: {skill_name}, Tool: {tool_name}",
+                        }
+                    }
+                elif event["type"] == "thinking":
+                    yield {
+                        "type": "activity",
+                        "data": {
+                            "action": "Analizuję...",
+                            "details": f"Skill: {skill_name}",
+                        }
+                    }
 
                 # Track funnel progress based on tool results
                 if event["type"] == "tool_result":
@@ -161,6 +197,9 @@ class AgentCoordinator:
             # Create new state with the session_id from the API layer
             state = self.memory_manager.create_initial_state(user_id, session_id)
             logger.info(f"Created new state for user {user_id}")
+
+            # Try to restore profile from workspace (returning user with expired Redis)
+            state = await self.flush_manager.restore_from_workspace(state)
 
         return state
 
@@ -302,6 +341,20 @@ class AgentCoordinator:
         state_dict = await self.persistence.load(user_id)
         if state_dict:
             state = AgentState.model_validate(state_dict)
+
+            # Flush memory before finalization
+            await self.flush_manager.flush(state)
+
+            # Archive session to workspace
+            workspace = self.workspace_manager.get_user_workspace(user_id)
+            messages = [
+                {"role": m.role, "content": m.content}
+                for m in state.working.conversation_buffer
+            ]
+            if messages:
+                workspace.save_session(state.session_id, messages)
+
+            # Compress session
             state = self.session_compressor.finalize_session(state)
             await self.persistence.save(user_id, state.model_dump())
             logger.info(f"Finalized session for user {user_id}")

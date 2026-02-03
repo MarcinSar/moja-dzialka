@@ -24,7 +24,17 @@ from app.models.schemas import (
     MpzpSymbol,
     MpzpSymbolsResponse,
     ErrorResponse,
+    # v3.0 Neighborhood
+    NeighborhoodResponse,
+    NeighborhoodCharacter,
+    NeighborhoodDensity,
+    NeighborhoodEnvironment,
+    NeighborhoodScores,
+    NeighborhoodNeighbors,
+    NeighborhoodPOI,
+    NeighborhoodAssessment,
 )
+from app.services.neighborhood_service import get_neighborhood_service
 
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -349,6 +359,93 @@ async def get_mpzp_symbols():
 
     except Exception as e:
         logger.error(f"Get MPZP symbols error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# NEIGHBORHOOD ANALYSIS (v3.0)
+# =============================================================================
+
+@router.get("/neighborhood/{parcel_id:path}", response_model=NeighborhoodResponse)
+async def get_neighborhood_analysis(
+    parcel_id: str,
+    radius_m: int = Query(500, ge=100, le=2000),
+):
+    """
+    Get comprehensive neighborhood analysis for a parcel.
+
+    PREMIUM FEATURE: Returns detailed assessment of:
+    - Character (urban/suburban/rural)
+    - Density metrics
+    - Transport and amenities scores
+    - Nearby POI
+    - Strengths and weaknesses
+    - Ideal use cases
+
+    Args:
+        parcel_id: The parcel ID to analyze
+        radius_m: Analysis radius in meters (default 500)
+
+    Returns:
+        NeighborhoodResponse with full analysis
+    """
+    try:
+        service = get_neighborhood_service()
+        analysis = await service.analyze_neighborhood(parcel_id, radius_m)
+
+        if "error" in analysis:
+            raise HTTPException(status_code=404, detail=analysis["error"])
+
+        # Map to response schema
+        return NeighborhoodResponse(
+            parcel_id=analysis.get("parcel_id", parcel_id),
+            district=analysis.get("district"),
+            city=analysis.get("city"),
+            character=NeighborhoodCharacter(
+                type=analysis.get("character", {}).get("type", "unknown"),
+                description=analysis.get("character", {}).get("description", ""),
+            ),
+            density=NeighborhoodDensity(
+                building_pct=analysis.get("density", {}).get("building_pct", 0),
+                residential_pct=analysis.get("density", {}).get("residential_pct", 0),
+                avg_parcel_size_m2=analysis.get("density", {}).get("avg_parcel_size_m2"),
+            ),
+            environment=NeighborhoodEnvironment(
+                quietness_score=analysis.get("environment", {}).get("quietness_score", 50),
+                nature_score=analysis.get("environment", {}).get("nature_score", 50),
+                accessibility_score=analysis.get("environment", {}).get("accessibility_score", 50),
+            ),
+            scores=NeighborhoodScores(
+                transport=analysis.get("scores", {}).get("transport", 50),
+                amenities=analysis.get("scores", {}).get("amenities", 50),
+                overall_livability=analysis.get("scores", {}).get("overall_livability", 50),
+            ),
+            neighbors=NeighborhoodNeighbors(
+                adjacent_count=analysis.get("neighbors", {}).get("adjacent_count", 0),
+                adjacent_parcels=analysis.get("neighbors", {}).get("adjacent_parcels", []),
+                nearby_poi_count=analysis.get("neighbors", {}).get("nearby_poi_count", 0),
+            ),
+            poi=[
+                NeighborhoodPOI(
+                    type=p.get("type", "unknown"),
+                    name=p.get("name"),
+                    distance_m=p.get("distance_m", 0),
+                )
+                for p in analysis.get("poi", [])
+            ],
+            assessment=NeighborhoodAssessment(
+                strengths=analysis.get("assessment", {}).get("strengths", []),
+                weaknesses=analysis.get("assessment", {}).get("weaknesses", []),
+                ideal_for=analysis.get("assessment", {}).get("ideal_for", []),
+            ),
+            summary=analysis.get("summary", ""),
+            is_premium=True,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Neighborhood analysis error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

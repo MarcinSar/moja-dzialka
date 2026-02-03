@@ -14,7 +14,7 @@ function App() {
   const [stats, setStats] = useState<{ total_parcels: number; total_gminy: number } | null>(null);
   const { setConnected, addActivity, startStreaming, appendToLastMessage, finishStreaming } = useChatStore();
   const { setGminy, setLoadingGminy, setMapData } = useSearchStore();
-  const { setAvatarMood } = useUIPhaseStore();
+  const { setAvatarMood, setActiveAgent } = useUIPhaseStore();
   const { startLoading, updateProgress, setReady, setError } = usePotreeStore();
 
   // Handle LiDAR request from ParcelRevealCard
@@ -114,6 +114,13 @@ function App() {
             });
             // Avatar thinks while tools execute
             setAvatarMood('thinking');
+            // Update agent type if provided (v3.0)
+            if (parsed.toolCall.agent_type) {
+              setActiveAgent(
+                parsed.toolCall.agent_type as import('@/stores/uiPhaseStore').AgentType,
+                undefined
+              );
+            }
           }
           break;
 
@@ -230,10 +237,10 @@ function App() {
           break;
 
         case 'skill_selected':
-          // v2: Skill selected by coordinator
+          // v3: Skill selected by coordinator with agent_type
           {
-            const data = event.data as { skill?: string; phase?: string };
-            console.log('[WS] Skill selected:', data.skill, 'phase:', data.phase);
+            const data = event.data as { skill?: string; phase?: string; agent_type?: string };
+            console.log('[WS] Skill selected:', data.skill, 'phase:', data.phase, 'agent:', data.agent_type);
             addActivity({
               id: `skill-${Date.now()}`,
               type: 'thinking',
@@ -241,6 +248,13 @@ function App() {
               details: `Skill: ${data.skill || 'unknown'}`,
               timestamp: new Date(),
             });
+            // Update active agent type in store
+            if (data.agent_type) {
+              setActiveAgent(
+                data.agent_type as import('@/stores/uiPhaseStore').AgentType,
+                data.skill
+              );
+            }
           }
           break;
 
