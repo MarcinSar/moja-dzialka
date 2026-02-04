@@ -2294,9 +2294,17 @@ class ToolExecutor:
         updates = params.get("updates", {})
         reason = params.get("reason", "")
 
-        state_updates = {}
+        perceived = self._search_state.perceived_preferences
+        if perceived is None:
+            return {"error": "Brak preferencji do modyfikacji"}, {}
+
+        # Modify perceived in-place and return the full dict as a 2-level update
         for key, value in updates.items():
-            state_updates[f"search_state.perceived_preferences.{key}"] = value
+            perceived[key] = value
+
+        state_updates = {
+            "search_state.perceived_preferences": perceived,
+        }
 
         return {
             "status": "preferences_refined",

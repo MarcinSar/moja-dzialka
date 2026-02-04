@@ -380,6 +380,10 @@ class SkillLoader:
         if tool_name == "execute_search":
             return state.working.search_state.preferences_approved
 
+        # Parcel details available only if search returned results
+        if tool_name in ("get_parcel_full_context", "get_parcel_neighborhood"):
+            return len(state.working.search_state.current_results) > 0
+
         # Default: available
         return True
 

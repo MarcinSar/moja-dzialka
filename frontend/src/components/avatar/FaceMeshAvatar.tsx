@@ -488,8 +488,7 @@ function FaceMeshScene({ compact = false }: { compact?: boolean }) {
 
   return (
     <>
-      {/* Background glow */}
-      <GlowBg mood={mood} />
+      {/* Background glow removed for clean HUD look */}
 
       <group ref={groupRef}>
         {/* Layer 1: Full tessellation wireframe (subtle mesh grid) */}
@@ -555,69 +554,26 @@ function FaceMeshScene({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function GlowBg({ mood }: { mood: AvatarMood }) {
-  const ref = useRef<THREE.Mesh>(null);
-  useFrame((s) => {
-    if (!ref.current) return;
-    const mat = ref.current.material as THREE.MeshBasicMaterial;
-    mat.opacity = 0.035 + Math.sin(s.clock.elapsedTime * 0.6) * 0.012;
-    ref.current.scale.setScalar(2.0 + Math.sin(s.clock.elapsedTime * 0.4) * 0.08);
-  });
-  return (
-    <mesh ref={ref} position={[0, 0, -0.5]}>
-      <circleGeometry args={[1, 64]} />
-      <meshBasicMaterial color={MOOD[mood].color} transparent opacity={0.035} />
-    </mesh>
-  );
-}
-
 // ─── Exported component ──────────────────────────────────────
 
 export default function FaceMeshAvatar({ compact = false }: { compact?: boolean }) {
-  const mood = useUIPhaseStore((s) => s.avatarMood) || 'idle';
-  const color = MOOD[mood].color;
-  const size = compact ? 'w-24 h-24' : 'w-[320px] h-[320px]';
-  const statusText =
-    mood === 'speaking' ? 'SPEAKING' :
-    mood === 'thinking' ? 'ANALYZING' :
-    mood === 'excited'  ? 'READY' : 'LISTENING';
+  const size = compact ? 'w-24 h-24' : 'w-[280px] h-[280px]';
 
   return (
-    <div className="flex flex-col items-center">
-      <div className={`${size} relative`}>
-        <Canvas
-          camera={{ position: [0, 0, 2.8], fov: 45 }}
-          gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
-          style={{ background: 'transparent' }}
-          onCreated={({ gl }) => { gl.setClearColor(0x000000, 0); }}
-        >
-          <FaceMeshScene compact={compact} />
-        </Canvas>
-
-        {/* Outer CSS glow */}
-        <div
-          className="absolute inset-[-15%] rounded-full blur-3xl pointer-events-none -z-10 opacity-25"
-          style={{
-            background: `radial-gradient(circle, #${color.getHexString()}40 0%, transparent 70%)`
-          }}
-        />
-      </div>
-
-      {/* Status label */}
-      {!compact && (
-        <div className="mt-2 flex items-center gap-2 opacity-40">
-          <span
-            className="w-1.5 h-1.5 rounded-full animate-pulse"
-            style={{ backgroundColor: `#${color.getHexString()}` }}
-          />
-          <span
-            className="text-[10px] font-light tracking-[0.25em] uppercase"
-            style={{ color: `#${color.getHexString()}` }}
-          >
-            {statusText}
-          </span>
-        </div>
-      )}
+    <div className={`${size} overflow-visible`}>
+      <Canvas
+        camera={{ position: [0, 0, 2.8], fov: 45 }}
+        dpr={compact ? 1 : [1, 1.5]}
+        gl={{
+          antialias: !compact,
+          alpha: true,
+          powerPreference: compact ? 'low-power' : 'high-performance',
+        }}
+        style={{ background: 'transparent' }}
+        onCreated={({ gl }) => { gl.setClearColor(0x000000, 0); }}
+      >
+        <FaceMeshScene compact={compact} />
+      </Canvas>
     </div>
   );
 }

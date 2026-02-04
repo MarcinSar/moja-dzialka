@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { useParcelRevealStore } from '@/stores/parcelRevealStore';
 import { useUIPhaseStore } from '@/stores/uiPhaseStore';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { AdvancedParcelCard } from './AdvancedParcelCard';
 
 // Animation variants for staggered entry
@@ -21,6 +22,7 @@ export function PropertyCardsStrip() {
   const spotlightParcelId = useUIPhaseStore((s) => s.spotlightParcelId);
   const setSpotlightParcel = useUIPhaseStore((s) => s.setSpotlightParcel);
   const setAvatarMood = useUIPhaseStore((s) => s.setAvatarMood);
+  const isMobile = useIsMobile();
 
   // Only show first 3 parcels (freemium)
   const displayParcels = parcels.slice(0, 3);
@@ -29,7 +31,11 @@ export function PropertyCardsStrip() {
 
   return (
     <motion.div
-      className="flex justify-center gap-4 flex-wrap"
+      className={
+        isMobile
+          ? 'flex gap-3 overflow-x-auto snap-x snap-mandatory pb-4 px-2 -mx-2 scrollbar-thin'
+          : 'flex justify-center gap-4 flex-wrap'
+      }
       variants={containerVariants}
       initial="hidden"
       animate="visible"

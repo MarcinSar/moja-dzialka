@@ -3,6 +3,9 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useParcelRevealStore } from '@/stores/parcelRevealStore';
 import { useUIPhaseStore } from '@/stores/uiPhaseStore';
+import { useMapLayerStore, BASE_LAYERS, WMS_OVERLAYS, type OverlayLayer } from '@/stores/mapLayerStore';
+import { useDetailsPanelStore } from '@/stores/detailsPanelStore';
+import { useIsMobile } from '@/hooks/useIsMobile';
 import { getMapData } from '@/services/api';
 
 // Color palette for parcels
@@ -15,11 +18,17 @@ const COLORS = {
     fill: '#f59e0b',    // amber-500
     stroke: '#d97706',  // amber-600
   },
+  details: {
+    fill: '#a855f7',    // purple-500
+    stroke: '#9333ea',  // purple-600
+  },
 };
 
 export function MapPanelImmersive() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const wmsLayersRef = useRef<Map<string, L.TileLayer.WMS>>(new Map());
   const geoJsonLayerRef = useRef<L.GeoJSON | null>(null);
   const parcelLayersRef = useRef<Map<string, L.Layer>>(new Map());
   const numberMarkersRef = useRef<L.Marker[]>([]);
@@ -31,11 +40,21 @@ export function MapPanelImmersive() {
   const setSpotlightParcel = useUIPhaseStore((s) => s.setSpotlightParcel);
   const goToParcel = useParcelRevealStore((s) => s.goToParcel);
 
+  // Map layer store
+  const baseLayer = useMapLayerStore((s) => s.baseLayer);
+  const overlays = useMapLayerStore((s) => s.overlays);
+  const setMapInstance = useMapLayerStore((s) => s.setMapInstance);
+
+  // Details panel store - for flyTo on details open
+  const detailsParcelData = useDetailsPanelStore((s) => s.parcelData);
+  const isDetailsOpen = useDetailsPanelStore((s) => s.isOpen);
+  const isMobile = useIsMobile();
+  const mapPadding: [number, number] = isMobile ? [40, 40] : [80, 80];
+
   // Initialize map once
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
 
-    // Default to Gdańsk/Gdynia area
     const initialCenter: [number, number] = [54.45, 18.55];
 
     const map = L.map(mapRef.current, {
@@ -45,32 +64,84 @@ export function MapPanelImmersive() {
       attributionControl: false,
     });
 
-    // Dark tile layer - Carto Dark Matter
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(map);
+    // Initial base layer
+    const layerConfig = BASE_LAYERS[baseLayer];
+    const opts: L.TileLayerOptions = { maxZoom: 19 };
+    if (layerConfig.subdomains) opts.subdomains = layerConfig.subdomains;
+    const tile = L.tileLayer(layerConfig.url, opts).addTo(map);
+    tileLayerRef.current = tile;
 
     // Zoom control in bottom right
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
     mapInstanceRef.current = map;
-    console.log('[Map] Initialized');
+    setMapInstance(map);
 
     return () => {
       map.remove();
       mapInstanceRef.current = null;
+      setMapInstance(null);
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switch base layer without resetting zoom/position
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    // Remove old tile layer
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+
+    const layerConfig = BASE_LAYERS[baseLayer];
+    const opts: L.TileLayerOptions = { maxZoom: 19 };
+    if (layerConfig.subdomains) opts.subdomains = layerConfig.subdomains;
+    const tile = L.tileLayer(layerConfig.url, opts);
+    tile.addTo(map);
+    // Ensure base tile is below all other layers
+    tile.setZIndex(0);
+    tileLayerRef.current = tile;
+  }, [baseLayer]);
+
+  // Toggle WMS overlays without resetting zoom/position
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    const overlayKeys: OverlayLayer[] = ['mpzp', 'cadastral', 'ortho'];
+
+    for (const key of overlayKeys) {
+      const existing = wmsLayersRef.current.get(key);
+      const shouldShow = overlays[key];
+
+      if (shouldShow && !existing) {
+        const config = WMS_OVERLAYS[key];
+        const wmsLayer = L.tileLayer.wms(config.url, {
+          layers: config.layers,
+          format: config.format,
+          transparent: true,
+          opacity: config.opacity,
+          maxZoom: 19,
+        });
+        wmsLayer.addTo(map);
+        wmsLayer.setZIndex(1);
+        wmsLayersRef.current.set(key, wmsLayer);
+      } else if (!shouldShow && existing) {
+        map.removeLayer(existing);
+        wmsLayersRef.current.delete(key);
+      }
+    }
+  }, [overlays]);
 
   // Style function for GeoJSON features
-  const getFeatureStyle = useCallback((_parcelId: string, isSpotlight: boolean) => {
-    const colors = isSpotlight ? COLORS.spotlight : COLORS.default;
+  const getFeatureStyle = useCallback((_parcelId: string, isSpotlight: boolean, isDetails: boolean = false) => {
+    const colors = isDetails ? COLORS.details : isSpotlight ? COLORS.spotlight : COLORS.default;
     return {
       fillColor: colors.fill,
-      fillOpacity: isSpotlight ? 0.5 : 0.3,
+      fillOpacity: isDetails ? 0.5 : isSpotlight ? 0.5 : 0.3,
       color: colors.stroke,
-      weight: isSpotlight ? 3 : 2,
+      weight: isDetails ? 3 : isSpotlight ? 3 : 2,
       opacity: 1,
     };
   }, []);
@@ -78,10 +149,7 @@ export function MapPanelImmersive() {
   // Fetch and display parcel geometries
   useEffect(() => {
     const map = mapInstanceRef.current;
-    if (!map) {
-      console.log('[Map] No map instance yet');
-      return;
-    }
+    if (!map) return;
 
     // Clear existing layers
     if (geoJsonLayerRef.current) {
@@ -94,27 +162,18 @@ export function MapPanelImmersive() {
     numberMarkersRef.current.forEach((marker) => map.removeLayer(marker));
     numberMarkersRef.current = [];
 
-    console.log('[Map] Parcels to display:', parcels.length);
     if (parcels.length === 0) return;
 
     // Get top 3 parcel IDs
     const displayParcels = parcels.slice(0, 3);
     const parcelIds = displayParcels.map((item) => item.parcel.parcel_id);
 
-    console.log('[Map] Fetching geometry for parcels:', parcelIds);
     setIsLoadingGeometry(true);
 
-    // Fetch actual parcel geometries from PostGIS
     getMapData(parcelIds, true)
       .then((response) => {
-        console.log('[Map] Received GeoJSON with', response.parcel_count, 'parcels');
+        if (!response.geojson || !response.geojson.features) return;
 
-        if (!response.geojson || !response.geojson.features) {
-          console.warn('[Map] No features in GeoJSON response');
-          return;
-        }
-
-        // Create GeoJSON layer
         const geoJsonLayer = L.geoJSON(response.geojson, {
           style: (feature) => {
             const parcelId = feature?.properties?.id_dzialki;
@@ -125,37 +184,21 @@ export function MapPanelImmersive() {
             const parcelId = feature?.properties?.id_dzialki;
             if (!parcelId) return;
 
-            // Store layer reference for later updates
             parcelLayersRef.current.set(parcelId, layer);
 
-            // Find the index for this parcel
             const index = displayParcels.findIndex(
               (item) => item.parcel.parcel_id === parcelId
             );
 
-            // Add click handler
             layer.on('click', () => {
-              if (index >= 0) {
-                goToParcel(index);
-              }
+              if (index >= 0) goToParcel(index);
               setSpotlightParcel(parcelId);
             });
 
-            // Add hover handlers
-            layer.on('mouseover', () => {
-              setSpotlightParcel(parcelId);
-            });
+            layer.on('mouseover', () => setSpotlightParcel(parcelId));
+            layer.on('mouseout', () => setSpotlightParcel(null));
 
-            layer.on('mouseout', () => {
-              setSpotlightParcel(null);
-            });
-
-            // Add popup with parcel info
-            const props = feature.properties || {};
-            const area = props.area_m2 ? `${props.area_m2.toLocaleString('pl-PL')} m²` : '';
-            const location = props.dzielnica || props.miejscowosc || props.gmina || '';
-
-            // Add a number marker in the center
+            // Number marker
             if ('getBounds' in layer && typeof (layer as L.Polygon).getBounds === 'function') {
               const center = (layer as L.Polygon).getBounds().getCenter();
               const numberIcon = L.divIcon({
@@ -174,6 +217,9 @@ export function MapPanelImmersive() {
               numberMarkersRef.current.push(numberMarker);
             }
 
+            const props = feature.properties || {};
+            const area = props.area_m2 ? `${props.area_m2.toLocaleString('pl-PL')} m²` : '';
+            const location = props.dzielnica || props.miejscowosc || props.gmina || '';
             layer.bindPopup(`
               <div class="text-sm">
                 <div class="font-semibold">${location}</div>
@@ -187,20 +233,13 @@ export function MapPanelImmersive() {
         geoJsonLayer.addTo(map);
         geoJsonLayerRef.current = geoJsonLayer;
 
-        // Fit map to parcels bounds
-        // API returns bounds as [[lat, lon], [lat, lon]] - no swap needed
         if (response.bounds) {
           const bounds = L.latLngBounds(
-            [response.bounds[0][0], response.bounds[0][1]], // SW [lat, lon]
-            [response.bounds[1][0], response.bounds[1][1]]  // NE [lat, lon]
+            [response.bounds[0][0], response.bounds[0][1]],
+            [response.bounds[1][0], response.bounds[1][1]]
           );
-          console.log('[Map] Fitting to bounds:', bounds.toBBoxString());
-          map.fitBounds(bounds, {
-            padding: [80, 80],
-            maxZoom: 16,
-          });
+          map.fitBounds(bounds, { padding: mapPadding, maxZoom: 16 });
         } else if (response.center) {
-          // API returns center as [lat, lon]
           map.setView([response.center[0], response.center[1]], 14);
         }
       })
@@ -212,25 +251,20 @@ export function MapPanelImmersive() {
       });
   }, [parcels, goToParcel, setSpotlightParcel, getFeatureStyle]);
 
-  // Update spotlight styling when spotlight changes (hover)
-  // ONLY update styles - NO flyToBounds on hover to prevent view reset
+  // Update spotlight styling
   useEffect(() => {
     const displayParcels = parcels.slice(0, 3);
-
     displayParcels.forEach((item) => {
       const layer = parcelLayersRef.current.get(item.parcel.parcel_id);
       if (!layer) return;
-
       const isSpotlight = item.parcel.parcel_id === spotlightParcelId;
-
-      // Update layer style only
       if ('setStyle' in layer && typeof layer.setStyle === 'function') {
         (layer as L.Path).setStyle(getFeatureStyle(item.parcel.parcel_id, isSpotlight));
       }
     });
   }, [spotlightParcelId, parcels, getFeatureStyle]);
 
-  // Zoom to current parcel when currentIndex changes (from card click)
+  // Zoom to current parcel on card click
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || parcels.length === 0) return;
@@ -241,21 +275,31 @@ export function MapPanelImmersive() {
     const layer = parcelLayersRef.current.get(currentParcel.parcel.parcel_id);
     if (layer && 'getBounds' in layer) {
       const bounds = (layer as L.Polygon).getBounds();
-      map.flyToBounds(bounds, {
-        padding: [100, 100],
-        maxZoom: 16,
-        duration: 0.5,
-      });
-      // Also set spotlight
+      map.flyToBounds(bounds, { padding: mapPadding, maxZoom: 16, duration: 0.5 });
       setSpotlightParcel(currentParcel.parcel.parcel_id);
     }
   }, [currentIndex, parcels, setSpotlightParcel]);
+
+  // FlyTo when details panel opens with geometry
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !isDetailsOpen || !detailsParcelData) return;
+
+    if (detailsParcelData.geometry_wgs84) {
+      const geojson = L.geoJSON(detailsParcelData.geometry_wgs84 as GeoJSON.GeoJsonObject);
+      const bounds = geojson.getBounds();
+      if (bounds.isValid()) {
+        map.flyToBounds(bounds, { padding: mapPadding, maxZoom: 17, duration: 0.7 });
+      }
+    } else if (detailsParcelData.centroid_lat && detailsParcelData.centroid_lon) {
+      map.flyTo([detailsParcelData.centroid_lat, detailsParcelData.centroid_lon], 16, { duration: 0.7 });
+    }
+  }, [isDetailsOpen, detailsParcelData]);
 
   return (
     <div className="relative w-full h-full">
       <div ref={mapRef} className="w-full h-full" />
 
-      {/* Loading indicator */}
       {isLoadingGeometry && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50
                         px-4 py-2 rounded-full backdrop-blur-xl bg-slate-900/80

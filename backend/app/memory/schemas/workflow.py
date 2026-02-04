@@ -167,19 +167,21 @@ class FunnelProgress(BaseModel):
     def is_ready_for_search(self) -> bool:
         """Check if enough info collected for search.
 
-        We can search if we have at least location OR clear preferences OR
-        preferences have been proposed (ready for approval/execution).
+        Approved preferences are always sufficient.
+        Proposed preferences + location can transition to SEARCH phase,
+        but the search skill gate will still require approval before execute_search.
         """
-        # CHANGED 2026-01-25: Check new location field too
+        if self.preferences_approved:
+            return True
+
         has_location = (
             self.location_collected or
             self.known_location is not None or
             (self.location is not None and (self.location.gmina or self.location.miejscowosc))
         )
         return (
-            has_location or
-            self.preferences_collected or
-            self.preferences_proposed  # Can transition to search skill
+            (has_location and self.preferences_collected) or
+            (has_location and self.preferences_proposed)
         )
 
     def is_discovery_sufficient(self) -> bool:

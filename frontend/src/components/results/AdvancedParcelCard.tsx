@@ -128,7 +128,7 @@ export function AdvancedParcelCard({
       onHoverStart={onHoverStart}
       onHoverEnd={onHoverEnd}
       className={`
-        relative w-[300px] rounded-2xl cursor-pointer overflow-hidden
+        relative w-[85vw] md:w-[300px] snap-center shrink-0 rounded-2xl cursor-pointer overflow-hidden
         backdrop-blur-xl transition-all duration-300
         ${
           feedbackState === 'favorited'
@@ -328,7 +328,7 @@ export function AdvancedParcelCard({
                 whileTap={{ scale: 0.95 }}
                 onClick={(e) => handleFeedback('favorite', e)}
                 disabled={isSubmitting}
-                className="p-2 rounded-lg bg-white/5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                className="p-3 md:p-2 rounded-lg bg-white/5 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
               >
                 <Heart className="w-4 h-4" />
               </motion.button>
@@ -337,7 +337,7 @@ export function AdvancedParcelCard({
                 whileTap={{ scale: 0.95 }}
                 onClick={(e) => handleFeedback('reject', e)}
                 disabled={isSubmitting}
-                className="p-2 rounded-lg bg-white/5 text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-colors"
+                className="p-3 md:p-2 rounded-lg bg-white/5 text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-colors"
               >
                 <XIcon className="w-4 h-4" />
               </motion.button>
@@ -349,7 +349,7 @@ export function AdvancedParcelCard({
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
             onClick={handleDetailsClick}
-            className="flex-1 flex items-center justify-center gap-2 py-2 rounded-lg
+            className="flex-1 flex items-center justify-center gap-2 py-3 md:py-2 rounded-lg
                        text-sm font-medium transition-all
                        bg-white/5 hover:bg-sky-500/20 text-slate-400 hover:text-sky-400"
           >
@@ -362,7 +362,7 @@ export function AdvancedParcelCard({
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.95 }}
             onClick={toggleExpand}
-            className="p-2 rounded-lg bg-white/5 text-slate-400 hover:text-white transition-colors"
+            className="p-3 md:p-2 rounded-lg bg-white/5 text-slate-400 hover:text-white transition-colors"
           >
             {isExpanded ? (
               <ChevronUp className="w-4 h-4" />

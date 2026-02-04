@@ -20,8 +20,8 @@ class NeighborhoodCharacter(str, Enum):
     """Classification of neighborhood character."""
     URBAN = "urban"              # Dense, city-like
     SUBURBAN = "suburban"        # Mixed, residential
-    RURAL = "rural"              # Sparse, countryside
-    TRANSITIONAL = "transitional"  # Mixed/changing
+    PERIPHERAL = "peripheral"    # City outskirts, sparse development
+    TRANSITIONAL = "transitional"  # Mixed/changing, developing area
 
 
 @dataclass
@@ -159,15 +159,30 @@ class NeighborhoodService:
 
             RETURN {
                 parcel_count_in_district: size(neighbors),
-                avg_area_m2: avg([n in neighbors | n.area_m2]),
-                avg_quietness: avg([n in neighbors | n.quietness_score]),
-                pct_built: toFloat(size([n in neighbors WHERE n.is_built])) / size(neighbors),
-                pct_residential: toFloat(size([n in neighbors WHERE n.has_residential])) / size(neighbors)
+                avg_area_m2: CASE WHEN size(neighbors) > 0
+                    THEN avg([n in neighbors | n.area_m2])
+                    ELSE 0 END,
+                avg_quietness: CASE WHEN size(neighbors) > 0
+                    THEN avg([n in neighbors | n.quietness_score])
+                    ELSE p.quietness_score END,
+                pct_built: CASE WHEN size(neighbors) > 0
+                    THEN toFloat(size([n in neighbors WHERE n.is_built])) / size(neighbors)
+                    ELSE 0.0 END,
+                pct_residential: CASE WHEN size(neighbors) > 0
+                    THEN toFloat(size([n in neighbors WHERE n.has_residential])) / size(neighbors)
+                    ELSE 0.0 END,
+                count_buildings_500m: p.count_buildings_500m,
+                gestosc_zabudowy: p.gestosc_zabudowy
             } as context
             """
             result = await self.graph_service.run_query(query, {"parcel_id": parcel_id})
             if result:
-                return result[0]["context"]
+                ctx = result[0]["context"]
+                # Ensure no None values for numeric fields
+                for key in ["pct_built", "pct_residential", "avg_area_m2", "avg_quietness"]:
+                    if ctx.get(key) is None:
+                        ctx[key] = 0
+                return ctx
             return {}
         except Exception as e:
             logger.error(f"Error getting neighborhood context: {e}")
@@ -264,9 +279,11 @@ class NeighborhoodService:
             },
 
             "density": {
-                "building_pct": neighborhood.get("pct_built", 0) * 100,
-                "residential_pct": neighborhood.get("pct_residential", 0) * 100,
-                "avg_parcel_size_m2": neighborhood.get("avg_area_m2", 0),
+                "building_pct": round((neighborhood.get("pct_built", 0) or 0) * 100, 1),
+                "residential_pct": round((neighborhood.get("pct_residential", 0) or 0) * 100, 1),
+                "avg_parcel_size_m2": round(neighborhood.get("avg_area_m2", 0) or 0, 0),
+                "count_buildings_500m": neighborhood.get("count_buildings_500m") or parcel.get("count_buildings_500m", 0),
+                "gestosc_zabudowy": neighborhood.get("gestosc_zabudowy") or parcel.get("gestosc_zabudowy", "brak danych"),
             },
 
             "environment": {
@@ -304,26 +321,32 @@ class NeighborhoodService:
         parcel: Dict[str, Any],
         neighborhood: Dict[str, Any],
     ) -> NeighborhoodCharacter:
-        """Determine neighborhood character."""
-        pct_built = neighborhood.get("pct_built", 0)
-        avg_quietness = neighborhood.get("avg_quietness", 50)
+        """Determine neighborhood character.
 
-        if pct_built > 0.7:
+        All parcels in this system are in Gdańsk, Gdynia or Sopot (cities),
+        so "rural" is never correct. Low density in a city = peripheral/developing.
+        """
+        pct_built = neighborhood.get("pct_built", 0)
+        count_buildings = neighborhood.get("count_buildings_500m") or parcel.get("count_buildings_500m", 0)
+
+        # Use building count in 500m as additional signal
+        if pct_built > 0.6 or (count_buildings and count_buildings > 200):
             return NeighborhoodCharacter.URBAN
-        elif pct_built > 0.4:
+        elif pct_built > 0.35 or (count_buildings and count_buildings > 80):
             return NeighborhoodCharacter.SUBURBAN
-        elif pct_built > 0.2:
+        elif pct_built > 0.15 or (count_buildings and count_buildings > 20):
             return NeighborhoodCharacter.TRANSITIONAL
         else:
-            return NeighborhoodCharacter.RURAL
+            # Even with very low density, these are still city parcels
+            return NeighborhoodCharacter.PERIPHERAL
 
     def _character_description(self, character: NeighborhoodCharacter) -> str:
         """Get character description."""
         descriptions = {
             NeighborhoodCharacter.URBAN: "Gęsta zabudowa miejska, typowy charakter osiedlowy",
             NeighborhoodCharacter.SUBURBAN: "Zabudowa podmiejska, głównie domy jednorodzinne",
-            NeighborhoodCharacter.RURAL: "Rzadka zabudowa, charakter wiejski",
-            NeighborhoodCharacter.TRANSITIONAL: "Okolica w trakcie rozwoju, mieszany charakter",
+            NeighborhoodCharacter.PERIPHERAL: "Obrzeża miasta, rozproszona zabudowa z dużą ilością zieleni",
+            NeighborhoodCharacter.TRANSITIONAL: "Okolica w trakcie rozwoju, mieszany charakter zabudowy",
         }
         return descriptions.get(character, "Nieokreślony charakter")
 
@@ -437,7 +460,7 @@ class NeighborhoodService:
         ideal = []
 
         # Based on character
-        if character == NeighborhoodCharacter.RURAL:
+        if character == NeighborhoodCharacter.PERIPHERAL:
             ideal.append("Miłośnicy ciszy i spokoju")
         elif character == NeighborhoodCharacter.SUBURBAN:
             ideal.append("Rodziny z dziećmi")

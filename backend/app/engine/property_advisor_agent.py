@@ -236,17 +236,24 @@ class PropertyAdvisorAgent:
         passed, gate_error = GateEvaluator.evaluate_gates(skill.gates, state)
         if not passed:
             logger.warning(f"Skill gate failed: {gate_error}")
-            # Don't block — just log, gates are advisory in v3
+            # Fallback: use the failure transition skill to satisfy missing conditions
+            fallback_skill = skill.transitions.on_failure or "discovery"
+            if fallback_skill != skill_name:
+                skill = get_skill(fallback_skill)
+                skill_name = fallback_skill
+                logger.info(f"Gate fallback to skill: {fallback_skill}")
 
         # 3. Get available tools from skill definition + registry
         loader = get_skill_loader()
         skill_tool_names = loader.get_tools_for_skill(skill_name, state)
+        tools = []
         if skill_tool_names:
             tools = [t for t in AGENT_TOOLS if t["name"] in skill_tool_names]
-            if not tools:
-                tools = AGENT_TOOLS  # fallback if no matching tools found
-        else:
-            tools = AGENT_TOOLS
+        if not tools:
+            # Safe defaults instead of ALL tools
+            logger.warning(f"No matching tools for skill {skill_name}, using safe defaults")
+            SAFE_DEFAULTS = {"resolve_location", "get_available_locations", "propose_search_preferences"}
+            tools = [t for t in AGENT_TOOLS if t["name"] in SAFE_DEFAULTS]
 
         # 4. Build system prompt
         context = self._build_context(user_message, state, skill)
@@ -481,6 +488,16 @@ class PropertyAdvisorAgent:
                 # Apply state updates from tool execution
                 self._apply_state_updates(state, state_updates)
 
+                # Refresh available tools after state changes (e.g., execute_search
+                # becomes available after preferences_approved=True)
+                if state_updates:
+                    loader = get_skill_loader()
+                    refreshed_names = loader.get_tools_for_skill(skill.name, state)
+                    if refreshed_names:
+                        refreshed = [t for t in AGENT_TOOLS if t["name"] in refreshed_names]
+                        if refreshed:
+                            tools = refreshed
+
                 yield {
                     "type": "tool_result",
                     "data": {
@@ -552,26 +569,41 @@ class PropertyAdvisorAgent:
     ) -> None:
         """Apply state updates from tool execution.
 
-        Handles nested updates like 'search_state.perceived_preferences'.
+        Handles nested updates like 'search_state.perceived_preferences'
+        and 3-level keys like 'search_state.perceived_preferences.city'.
         """
         if not updates:
             return
 
         for key, value in updates.items():
-            if "." in key:
-                # Handle nested updates (e.g., "search_state.perceived_preferences")
-                parts = key.split(".")
-                if parts[0] == "search_state" and len(parts) == 2:
-                    search_state = state.working.search_state
-                    attr = parts[1]
-                    if hasattr(search_state, attr):
-                        setattr(search_state, attr, value)
-                        logger.debug(f"Updated search_state.{attr}")
-            else:
+            if "." not in key:
                 # Direct attribute update
                 if hasattr(state, key):
                     setattr(state, key, value)
                     logger.debug(f"Updated state.{key}")
+                continue
+
+            parts = key.split(".")
+            if parts[0] != "search_state":
+                continue
+
+            search_state = state.working.search_state
+
+            if len(parts) == 2:
+                # search_state.preferences_approved = True
+                attr = parts[1]
+                if hasattr(search_state, attr):
+                    setattr(search_state, attr, value)
+                    logger.debug(f"Updated search_state.{attr}")
+
+            elif len(parts) == 3:
+                # search_state.perceived_preferences.city = "Gdańsk"
+                container_attr = parts[1]
+                nested_key = parts[2]
+                container = getattr(search_state, container_attr, None)
+                if isinstance(container, dict):
+                    container[nested_key] = value
+                    logger.debug(f"Updated search_state.{container_attr}.{nested_key}")
 
     def get_last_response(self) -> Optional[str]:
         """Get the last text response from the agent."""

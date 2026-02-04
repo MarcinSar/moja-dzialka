@@ -268,7 +268,7 @@ class NeighborhoodPOI(BaseModel):
 
 class NeighborhoodCharacter(BaseModel):
     """Neighborhood character assessment."""
-    type: str  # urban, suburban, rural, transitional
+    type: str  # urban, suburban, peripheral, transitional
     description: str
 
 
@@ -277,6 +277,8 @@ class NeighborhoodDensity(BaseModel):
     building_pct: float
     residential_pct: float
     avg_parcel_size_m2: Optional[float] = None
+    count_buildings_500m: Optional[int] = None
+    gestosc_zabudowy: Optional[str] = None
 
 
 class NeighborhoodEnvironment(BaseModel):

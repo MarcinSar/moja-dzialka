@@ -17,9 +17,10 @@ tools:
     - get_districts_in_miejscowosc
   context_available:
     - propose_search_preferences
+    - approve_search_preferences
+    - execute_search
     - count_matching_parcels_quick
   restricted:
-    - execute_search
     - capture_contact_info
 
 transitions:

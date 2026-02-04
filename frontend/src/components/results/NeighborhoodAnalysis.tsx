@@ -49,6 +49,8 @@ interface NeighborhoodDensity {
   building_pct: number;
   residential_pct: number;
   avg_parcel_size_m2?: number;
+  count_buildings_500m?: number;
+  gestosc_zabudowy?: string;
 }
 
 interface NeighborhoodEnvironment {
@@ -93,7 +95,7 @@ interface NeighborhoodData {
 const CHARACTER_ICONS: Record<string, React.ReactNode> = {
   urban: <Building2 className="w-5 h-5" />,
   suburban: <Home className="w-5 h-5" />,
-  rural: <TreePine className="w-5 h-5" />,
+  peripheral: <TreePine className="w-5 h-5" />,
   transitional: <Mountain className="w-5 h-5" />,
 };
 
@@ -101,7 +103,7 @@ const CHARACTER_ICONS: Record<string, React.ReactNode> = {
 const CHARACTER_COLORS: Record<string, string> = {
   urban: 'from-slate-500 to-slate-400',
   suburban: 'from-amber-500 to-amber-400',
-  rural: 'from-emerald-500 to-emerald-400',
+  peripheral: 'from-emerald-500 to-emerald-400',
   transitional: 'from-sky-500 to-sky-400',
 };
 
@@ -168,7 +170,7 @@ export function NeighborhoodAnalysis({ parcelId }: NeighborhoodAnalysisProps) {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="space-y-6"
+      className="space-y-4 md:space-y-6"
     >
       {/* Premium badge */}
       {data.is_premium && (
@@ -193,8 +195,8 @@ export function NeighborhoodAnalysis({ parcelId }: NeighborhoodAnalysisProps) {
                 ? 'Okolica miejska'
                 : characterType === 'suburban'
                 ? 'Okolica podmiejska'
-                : characterType === 'rural'
-                ? 'Okolica wiejska'
+                : characterType === 'peripheral'
+                ? 'Obrzeża miasta'
                 : 'Strefa przejściowa'}
             </h3>
             <p className="text-slate-400 text-sm mt-1">{data.character.description}</p>
@@ -208,7 +210,7 @@ export function NeighborhoodAnalysis({ parcelId }: NeighborhoodAnalysisProps) {
           <Building className="w-4 h-4" />
           Ocena środowiska
         </h4>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-2 md:gap-4">
           <ScoreGauge
             icon={<Volume2 className="w-4 h-4" />}
             label="Cisza"
@@ -262,14 +264,22 @@ export function NeighborhoodAnalysis({ parcelId }: NeighborhoodAnalysisProps) {
           <Users className="w-4 h-4" />
           Gęstość zabudowy
         </h4>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-2 md:gap-4">
           <StatBox
-            label="Zabudowa"
+            label="Zabudowa w dzielnicy"
             value={`${Math.round(data.density.building_pct)}%`}
           />
           <StatBox
             label="Mieszkalna"
             value={`${Math.round(data.density.residential_pct)}%`}
+          />
+          <StatBox
+            label="Budynki w 500m"
+            value={
+              data.density.count_buildings_500m
+                ? `${data.density.count_buildings_500m}`
+                : '—'
+            }
           />
           <StatBox
             label="Śr. działka"
@@ -280,6 +290,11 @@ export function NeighborhoodAnalysis({ parcelId }: NeighborhoodAnalysisProps) {
             }
           />
         </div>
+        {data.density.gestosc_zabudowy && data.density.gestosc_zabudowy !== 'brak danych' && (
+          <div className="mt-3 text-xs text-slate-400 text-center">
+            Kategoria: <span className="text-slate-300">{data.density.gestosc_zabudowy}</span>
+          </div>
+        )}
       </div>
 
       {/* Nearby POI */}

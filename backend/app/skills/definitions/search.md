@@ -23,6 +23,8 @@ tools:
     - approve_search_preferences
     - refine_search_preferences
     - propose_filter_refinement
+    - get_parcel_full_context
+    - get_parcel_neighborhood
   restricted:
     - capture_contact_info
 

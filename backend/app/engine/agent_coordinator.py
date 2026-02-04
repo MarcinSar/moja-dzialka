@@ -221,14 +221,17 @@ class AgentCoordinator:
 
         # DISCOVERY phase
         if phase == FunnelPhase.DISCOVERY:
-            if funnel.is_ready_for_search():
-                # Enough info gathered, can search
+            if funnel.preferences_approved and funnel.is_ready_for_search():
+                # Preferences approved - ready for search
                 return "search"
             else:
                 return "discovery"
 
         # SEARCH phase
         if phase == FunnelPhase.SEARCH:
+            if not search.preferences_approved:
+                # Can't search without approved preferences - go back to discovery
+                return "discovery"
             if not search.search_executed:
                 return "search"
             elif funnel.favorites_count > 0:
@@ -272,26 +275,33 @@ class AgentCoordinator:
     ) -> None:
         """Update funnel progress based on tool result.
 
-        Note: Search state updates are now handled by ToolExecutor.
-        This method only tracks funnel progress for phase transitions.
+        Synchronizes both workflow.funnel_progress and working.search_state
+        to prevent state divergence between the two tracking paths.
         """
         if not result or "error" in result:
             return
 
         funnel = state.workflow.funnel_progress
+        search = state.working.search_state
 
-        # Search tools - track funnel progress
+        # Search tools - track funnel progress + sync working state
         if tool_name == "propose_search_preferences":
             funnel.preferences_proposed = True
+            if not search.preferences_proposed:
+                search.preferences_proposed = True
 
         elif tool_name == "approve_search_preferences":
             funnel.preferences_approved = True
+            if not search.preferences_approved:
+                search.preferences_approved = True
 
         elif tool_name == "execute_search":
             parcels = result.get("parcels", [])
             funnel.search_initiated = True
             funnel.first_results_shown = True
             funnel.parcels_shown_count += len(parcels)
+            if not search.search_executed:
+                search.search_executed = True
 
         # Price tools
         elif tool_name == "get_district_prices":

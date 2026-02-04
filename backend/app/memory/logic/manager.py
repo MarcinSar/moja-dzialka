@@ -547,9 +547,9 @@ class MemoryManager:
         current = state.working.current_phase
         progress = state.workflow.funnel_progress
 
-        # Discovery → Search
+        # Discovery → Search (only when preferences are approved)
         if current == FunnelPhase.DISCOVERY:
-            if progress.is_ready_for_search():
+            if progress.preferences_approved and progress.is_ready_for_search():
                 return FunnelPhase.SEARCH
             return FunnelPhase.DISCOVERY
 

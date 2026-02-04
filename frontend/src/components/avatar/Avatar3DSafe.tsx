@@ -123,12 +123,21 @@ function isWebGLSupported(): boolean {
   }
 }
 
+// Check if device is low-end (mobile + few cores)
+function isLowEndDevice(): boolean {
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const lowCores = (navigator.hardwareConcurrency ?? 8) <= 4;
+  return isMobile && lowCores;
+}
+
 // Main safe wrapper
 export function Avatar3DSafe({ compact = false }: { compact?: boolean }) {
   const [webglSupported, setWebglSupported] = useState<boolean | null>(null);
+  const [isLowEnd, setIsLowEnd] = useState(false);
 
   useEffect(() => {
     setWebglSupported(isWebGLSupported());
+    setIsLowEnd(isLowEndDevice());
   }, []);
 
   // Still checking
@@ -136,9 +145,10 @@ export function Avatar3DSafe({ compact = false }: { compact?: boolean }) {
     return <Avatar3DLoading compact={compact} />;
   }
 
-  // No WebGL - use 2D fallback
-  if (!webglSupported) {
-    console.warn('[Avatar3D] WebGL not supported, using 2D fallback');
+  // No WebGL or low-end mobile — use 2D fallback
+  if (!webglSupported || isLowEnd) {
+    if (isLowEnd) console.info('[Avatar3D] Low-end device detected, using 2D fallback');
+    if (!webglSupported) console.warn('[Avatar3D] WebGL not supported, using 2D fallback');
     return <Avatar2DFallback compact={compact} />;
   }
 
