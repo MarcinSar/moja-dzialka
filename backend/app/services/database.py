@@ -5,8 +5,7 @@ Provides connection pooling and async support for:
 - PostGIS (PostgreSQL with spatial extensions)
 - Neo4j (Graph database with Vector Index)
 - Redis (Cache)
-
-Note: Milvus was replaced with Neo4j Vector Index for simplicity.
+- MongoDB (Leads)
 """
 
 import asyncio
@@ -21,14 +20,6 @@ from neo4j import GraphDatabase, AsyncGraphDatabase
 import redis.asyncio as redis
 
 from app.config import settings
-
-# Optional pymilvus import (deprecated, use Neo4j Vector Index instead)
-try:
-    from pymilvus import connections, Collection, utility
-    MILVUS_AVAILABLE = True
-except ImportError:
-    MILVUS_AVAILABLE = False
-    logger.warning("pymilvus not installed - using Neo4j Vector Index instead")
 
 
 # =============================================================================
@@ -185,138 +176,6 @@ class Neo4jManager:
 
 
 # =============================================================================
-# MILVUS (DEPRECATED - Use Neo4j Vector Index)
-# =============================================================================
-
-class MilvusManager:
-    """Milvus connection manager (deprecated - use Neo4j Vector Index).
-
-    This class is kept for backwards compatibility but vector search
-    should be done via Neo4j's native vector index.
-    """
-
-    COLLECTION_NAME = "parcels"
-
-    def __init__(self):
-        self._connected = False
-        self._collection = None
-        self._available = MILVUS_AVAILABLE
-
-    def connect(self):
-        """Connect to Milvus."""
-        if not self._available:
-            logger.debug("Milvus not available - using Neo4j Vector Index")
-            return
-
-        if not self._connected:
-            connections.connect(
-                alias="default",
-                host=settings.milvus_host,
-                port=settings.milvus_port,
-            )
-            self._connected = True
-            logger.info(f"Milvus connected: {settings.milvus_host}:{settings.milvus_port}")
-
-    def get_collection(self, fresh: bool = False):
-        """Get parcels collection."""
-        if not self._available:
-            return None
-
-        self.connect()
-        if utility.has_collection(self.COLLECTION_NAME):
-            if fresh or self._collection is None:
-                self._collection = Collection(self.COLLECTION_NAME)
-                self._collection.load()
-            return self._collection
-        return None
-
-    def refresh_collection(self):
-        """Refresh collection reference."""
-        if not self._available:
-            return
-
-        logger.info("Refreshing Milvus collection and reconnecting...")
-        if self._collection is not None:
-            try:
-                self._collection.release()
-            except Exception as e:
-                logger.warning(f"Failed to release collection: {e}")
-        self._collection = None
-
-        try:
-            connections.disconnect("default")
-        except Exception:
-            pass
-        self._connected = False
-
-        self.connect()
-        self.get_collection()
-
-    def search(
-        self,
-        query_vectors: list,
-        top_k: int = 10,
-        filter_expr: str = None,
-        output_fields: list = None,
-        fresh: bool = False,
-    ) -> list:
-        """Search for similar vectors (use Neo4j Vector Index instead)."""
-        if not self._available:
-            logger.warning("Milvus not available - use Neo4j vector search")
-            return []
-
-        if filter_expr is not None or fresh:
-            logger.info(f"Creating fresh Milvus connection for search with filter: {filter_expr}")
-            try:
-                connections.disconnect("default")
-            except Exception as e:
-                logger.warning(f"Disconnect failed: {e}")
-            self._connected = False
-            self._collection = None
-
-        collection = self.get_collection()
-        if collection is None:
-            return []
-
-        search_params = {
-            "metric_type": "COSINE",
-            "params": {"nprobe": 16},
-        }
-
-        results = collection.search(
-            data=query_vectors,
-            anns_field="embedding",
-            param=search_params,
-            limit=top_k,
-            expr=filter_expr,
-            output_fields=output_fields or ["gmina", "area_m2", "quietness_score"],
-        )
-
-        return results
-
-    async def health_check(self) -> bool:
-        """Check Milvus connection."""
-        if not self._available:
-            return False  # Not available, report as not connected
-
-        try:
-            self.connect()
-            return utility.has_collection(self.COLLECTION_NAME)
-        except Exception as e:
-            logger.error(f"Milvus health check failed: {e}")
-            return False
-
-    def close(self):
-        """Disconnect from Milvus."""
-        if not self._available:
-            return
-
-        if self._connected:
-            connections.disconnect("default")
-            self._connected = False
-
-
-# =============================================================================
 # MONGODB
 # =============================================================================
 
@@ -429,7 +288,6 @@ class RedisManager:
 
 postgis = PostGISManager()
 neo4j = Neo4jManager()
-milvus = MilvusManager()
 mongodb = MongoDBManager()
 redis_cache = RedisManager()
 
@@ -461,17 +319,6 @@ async def check_all_connections() -> dict:
     except Exception as e:
         results["neo4j"] = {"connected": False, "error": str(e)}
 
-    # Milvus
-    start = time.time()
-    try:
-        connected = await milvus.health_check()
-        results["milvus"] = {
-            "connected": connected,
-            "latency_ms": int((time.time() - start) * 1000)
-        }
-    except Exception as e:
-        results["milvus"] = {"connected": False, "error": str(e)}
-
     # Redis
     start = time.time()
     try:
@@ -501,7 +348,6 @@ async def close_all_connections():
     """Close all database connections."""
     await postgis.close()
     await neo4j.close()
-    milvus.close()
     await mongodb.close()
     await redis_cache.close()
     logger.info("All database connections closed")

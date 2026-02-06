@@ -17,7 +17,6 @@ from loguru import logger
 from app.memory import AgentState, SearchState
 from app.services import (
     spatial_service,
-    vector_service,
     graph_service,
     hybrid_search,
     SearchPreferences,
@@ -139,18 +138,18 @@ class ToolExecutor:
             elif tool_name == "get_parcel_full_context":
                 result = await self._get_parcel_full_context(params)
                 return result, {}
-            # Dynamic location tools (2026-01-25)
+            # Location tools (agentic: search + confirm)
+            elif tool_name == "search_locations":
+                result = await self._search_locations(params)
+                return result, {}
+            elif tool_name == "confirm_location":
+                result = await self._confirm_location(params)
+                return result, {}
             elif tool_name == "get_available_locations":
                 result = await self._get_available_locations(params)
                 return result, {}
             elif tool_name == "get_districts_in_miejscowosc":
                 result = await self._get_districts_in_miejscowosc(params)
-                return result, {}
-            elif tool_name == "resolve_location":
-                result = await self._resolve_location(params)
-                return result, {}
-            elif tool_name == "validate_location_combination":
-                result = await self._validate_location_combination(params)
                 return result, {}
             # Semantic entity resolution (2026-01-25)
             elif tool_name == "resolve_entity":
@@ -204,77 +203,42 @@ class ToolExecutor:
         miejscowosc_param = params.get("miejscowosc")
         powiat_param = params.get("powiat")
 
-        # Smart location parsing
-        try:
-            gminy_names = await graph_service.get_all_gminy()
-            gminy_lower = {g.lower(): g for g in gminy_names}
+        # Use validated location from state (set by confirm_location)
+        validated_location = self.state.workflow.funnel_progress.location
+        if validated_location and validated_location.validated:
+            if not gmina_param and validated_location.gmina:
+                gmina_param = validated_location.gmina
+                logger.info(f"Using validated gmina from state: {gmina_param}")
+            if not miejscowosc_param and validated_location.dzielnica:
+                miejscowosc_param = validated_location.dzielnica
+                logger.info(f"Using validated dzielnica from state: {miejscowosc_param}")
+            if not powiat_param and validated_location.powiat:
+                powiat_param = validated_location.powiat
+        elif not gmina_param and not powiat_param:
+            logger.warning("No validated location in state — agent should use search_locations + confirm_location first")
 
-            # Fix: if miejscowosc is actually a gmina name, move it to gmina
-            if miejscowosc_param and not gmina_param:
-                miejscowosc_lower = miejscowosc_param.lower()
-                if miejscowosc_lower in gminy_lower:
-                    gmina_param = gminy_lower[miejscowosc_lower]
-                    miejscowosc_param = None  # Clear - it was a gmina, not dzielnica
-
-            # Parse location_description if needed
-            if location_desc and not (gmina_param and miejscowosc_param and powiat_param):
-                clean_loc = location_desc.lower()
-                clean_loc = clean_loc.replace("okolice ", "").replace("gmina ", "").replace("powiat ", "")
-                clean_loc = clean_loc.replace("miasto ", "").replace("m. ", "").replace("centrum ", "").strip()
-                # Handle genitive forms (Gdyni -> Gdynia, Gdańska -> Gdańsk)
-                if clean_loc.endswith("i"):
-                    clean_loc_base = clean_loc[:-1] + "a"  # Gdyni -> Gdynia
-                elif clean_loc.endswith("a"):
-                    clean_loc_base = clean_loc[:-1]  # Gdańska -> Gdańsk
-                else:
-                    clean_loc_base = clean_loc
-
-                # Try gmina first (more common)
-                if not gmina_param:
-                    for gmina_name in gminy_names:
-                        clean_gmina = gmina_name.lower().replace("m. ", "")
-                        if clean_loc == clean_gmina or clean_loc_base == clean_gmina:
-                            gmina_param = gmina_name
-                            break
-
-                # Try dzielnica (district) - use resolve_location_v2 for semantic matching
-                # UPDATED 2026-01-25: Use resolve_location_v2 with vector embeddings
-                # This handles Matemblewo → Matarnia, VII Dwór → Oliwa/Wrzeszcz, etc.
-                if not miejscowosc_param:
-                    # Use resolve_location_v2 which uses semantic embeddings
-                    resolved = await graph_service.resolve_location_v2(location_desc)
-                    if resolved.get("resolved"):
-                        # V2 returns richer information
-                        confidence = resolved.get("confidence", "MEDIUM")
-
-                        if resolved.get("maps_to_district"):
-                            # It's a district - set both dzielnica and its parent gmina
-                            miejscowosc_param = resolved["maps_to_district"]
-                            if not gmina_param and resolved.get("maps_to_gmina"):
-                                gmina_param = resolved["maps_to_gmina"]
-                            logger.info(f"Resolved '{location_desc}' to district: {miejscowosc_param} in {gmina_param} (confidence: {confidence})")
-                        elif resolved.get("search_in_districts") and len(resolved["search_in_districts"]) > 0:
-                            # Location maps to multiple districts (e.g., VII Dwór → Oliwa, Wrzeszcz)
-                            # Use first as primary, others as fallback
-                            miejscowosc_param = resolved["search_in_districts"][0]
-                            if not gmina_param and resolved.get("maps_to_gmina"):
-                                gmina_param = resolved["maps_to_gmina"]
-                            logger.info(f"Resolved '{location_desc}' to districts: {resolved['search_in_districts']} in {gmina_param}")
-                        elif resolved.get("maps_to_gmina") and not gmina_param:
-                            # It's a city/miejscowość - set as gmina
-                            gmina_param = resolved["maps_to_gmina"]
-                            logger.info(f"Resolved '{location_desc}' to city/gmina: {gmina_param}")
-
-                # Try powiat as last resort
-                if not powiat_param and not gmina_param and not miejscowosc_param:
-                    powiaty = await spatial_service.get_powiaty()
-                    for p in powiaty:
-                        clean_powiat = p.lower().replace("m. ", "")
-                        if clean_loc == clean_powiat or clean_powiat in clean_loc:
-                            powiat_param = p
-                            break
-        except Exception:
-            pass
+        # Auto-infer centroid if location resolved but no explicit lat/lon
+        lat_param = params.get("lat")
+        lon_param = params.get("lon")
+        radius_param = params.get("radius_m", 5000)
+        if not lat_param and not lon_param:
+            try:
+                centroid = await graph_service.get_location_centroid(
+                    dzielnica=miejscowosc_param,
+                    gmina=gmina_param
+                )
+                if centroid:
+                    lat_param = centroid["lat"]
+                    lon_param = centroid["lon"]
+                    # Default radius: 3km for dzielnica, 10km for miasto
+                    if miejscowosc_param:
+                        radius_param = params.get("radius_m", 3000)
+                    else:
+                        radius_param = params.get("radius_m", 10000)
+                    logger.info(f"Auto-inferred centroid for {miejscowosc_param or gmina_param}: "
+                               f"lat={lat_param:.4f}, lon={lon_param:.4f}, radius={radius_param}m")
+            except Exception as e:
+                logger.warning(f"Failed to auto-infer centroid: {e}")
 
         preferences = {
             "location_description": location_desc,
@@ -282,9 +246,9 @@ class ToolExecutor:
             "miejscowosc": miejscowosc_param,
             "powiat": powiat_param,
             # NOTE: charakter_terenu removed - data is NULL for all parcels in Neo4j
-            "lat": params.get("lat"),
-            "lon": params.get("lon"),
-            "radius_m": params.get("radius_m", 5000),
+            "lat": lat_param,
+            "lon": lon_param,
+            "radius_m": radius_param,
             # CHANGED 2026-01-25: No default area filters! Only use what user explicitly provided
             "min_area_m2": params.get("min_area_m2"),  # None if not provided
             "max_area_m2": params.get("max_area_m2"),  # None if not provided
@@ -316,6 +280,24 @@ class ToolExecutor:
             "size_category": params.get("size_category"),  # mala, pod_dom, duza, bardzo_duza
             "pog_residential": params.get("pog_residential"),  # Only residential POG zones
         }
+
+        # Build query_text for GraphRAG semantic search
+        query_parts = []
+        if location_desc:
+            query_parts.append(location_desc)
+        if preferences.get("quietness_categories"):
+            query_parts.append("cicha spokojna okolica")
+        if preferences.get("nature_categories"):
+            query_parts.append("blisko natury zieleni lasu")
+        if preferences.get("build_status") == "niezabudowana":
+            query_parts.append("niezabudowana pod budowę")
+        if preferences.get("ownership_type") == "prywatna":
+            query_parts.append("prywatna działka do kupienia")
+        if preferences.get("max_dist_to_water_m"):
+            query_parts.append("blisko wody jeziora rzeki")
+        if preferences.get("max_dist_to_forest_m"):
+            query_parts.append("blisko lasu")
+        preferences["query_text"] = " ".join(query_parts) if query_parts else None
 
         # Build human-readable summary
         summary = {
@@ -501,6 +483,8 @@ class ToolExecutor:
             build_status=prefs.get("build_status"),
             size_category=prefs.get("size_category"),
             pog_residential=prefs.get("pog_residential"),
+            # Semantic search text for GraphRAG
+            query_text=prefs.get("query_text"),
         )
 
         results = await hybrid_search.search(search_prefs, limit=limit, include_details=True)
@@ -1102,7 +1086,7 @@ class ToolExecutor:
     # =========================================================================
 
     async def _find_similar_parcels(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Find parcels similar to a reference parcel."""
+        """Find parcels similar to a reference parcel using graph embeddings (256-dim FastRP)."""
         raw_ref = params["parcel_id"]
         parcel_id = self._resolve_parcel_reference(raw_ref)
 
@@ -1111,7 +1095,9 @@ class ToolExecutor:
 
         limit = params.get("limit", 5)
 
-        results = await vector_service.search_similar(parcel_id=parcel_id, top_k=limit)
+        results = await graph_service.find_similar_by_graph_embedding(
+            parcel_id=parcel_id, limit=limit
+        )
 
         return {
             "reference_parcel": parcel_id,
@@ -1119,11 +1105,15 @@ class ToolExecutor:
             "count": len(results),
             "similar_parcels": [
                 {
-                    "id": r.parcel_id,
-                    "similarity_score": round(r.similarity_score, 3),
-                    "gmina": r.gmina,
-                    "area_m2": r.area_m2,
-                    "quietness_score": r.quietness_score,
+                    "id": r.get("id"),
+                    "similarity_score": round(r.get("similarity", 0), 3),
+                    "gmina": r.get("gmina"),
+                    "dzielnica": r.get("dzielnica"),
+                    "area_m2": r.get("area_m2"),
+                    "quietness_score": r.get("quietness_score"),
+                    "nature_score": r.get("nature_score"),
+                    "centroid_lat": r.get("lat"),
+                    "centroid_lon": r.get("lon"),
                 }
                 for r in results
             ]
@@ -1179,12 +1169,23 @@ class ToolExecutor:
         """Quick count based on current perceived preferences - for checkpoint searches.
 
         Uses perceived_preferences from state if no params provided.
+        Also reads validated location from funnel state as default.
         Useful for showing users how many parcels match their evolving criteria.
         """
-        # Merge state preferences with any additional params
+        # Start with validated location from state (most reliable source)
         prefs = {}
+        validated_location = self.state.workflow.funnel_progress.location
+        if validated_location and validated_location.validated:
+            if validated_location.gmina:
+                prefs["gmina"] = validated_location.gmina
+            if validated_location.dzielnica:
+                prefs["miejscowosc"] = validated_location.dzielnica
+
+        # Merge state perceived preferences (may override location)
         if self._search_state.perceived_preferences:
-            prefs = self._search_state.perceived_preferences.copy()
+            prefs.update(self._search_state.perceived_preferences)
+
+        # Agent params have highest priority
         prefs.update(params)
 
         # Build query conditions
@@ -1196,8 +1197,12 @@ class ToolExecutor:
             query_params["gmina"] = prefs["gmina"]
 
         if prefs.get("miejscowosc"):
-            conditions.append("p.dzielnica = $dzielnica")
+            # Handle sub-districts: "Wrzeszcz" matches "Wrzeszcz Dolny", "Wrzeszcz Górny"
+            conditions.append(
+                "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dzielnica_prefix)"
+            )
             query_params["dzielnica"] = prefs["miejscowosc"]
+            query_params["dzielnica_prefix"] = prefs["miejscowosc"] + " "
 
         if prefs.get("min_area_m2"):
             conditions.append("p.area_m2 >= $min_area")
@@ -1840,7 +1845,7 @@ class ToolExecutor:
                 "total_parcels": result.get("total_parcels", 0),
                 "by_miejscowosc": result.get("by_miejscowosc", {}),
                 "hint": result.get("hint", "Podaj miejscowość lub dzielnicę."),
-                "note": "Użyj resolve_location() aby zwalidować tekst lokalizacji od użytkownika.",
+                "note": "Użyj search_locations() aby znaleźć lokalizację, potem confirm_location() aby zapisać.",
             }
         except Exception as e:
             logger.error(f"Get available locations error: {e}")
@@ -1874,80 +1879,271 @@ class ToolExecutor:
             logger.error(f"Get districts in miejscowosc error: {e}")
             return {"error": str(e)}
 
-    async def _resolve_location(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolve user's location text to gmina + miejscowosc + dzielnica.
+    async def _search_locations(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Search DB for locations across all admin levels.
 
-        CRITICAL: Agent MUST use this before propose_search_preferences!
-        Automatically detects whether input is miejscowość or dzielnica.
+        Pure DB lookup — LLM handles Polish grammar (declension, prepositions).
+        Returns matching locations with hierarchy and parcel counts.
         """
-        location_text = params.get("location_text")
-        if not location_text:
-            return {"error": "Podaj tekst lokalizacji (location_text)"}
+        name = params.get("name", "").strip()
+        level = params.get("level")
+        parent_name = params.get("parent_name")
 
-        try:
-            result = await graph_service.resolve_location(location_text)
+        if not name:
+            return {"error": "Podaj nazwę lokalizacji (name)"}
 
-            if result.get("resolved"):
-                return {
-                    "resolved": True,
-                    "gmina": result.get("gmina"),
-                    "miejscowosc": result.get("miejscowosc"),
-                    "dzielnica": result.get("dzielnica"),
-                    "parcel_count": result.get("parcel_count", 0),
-                    "original_input": location_text,
-                    "note": "Użyj tych wartości w propose_search_preferences.",
-                }
-            else:
-                return {
-                    "resolved": False,
-                    "error": result.get("error", f"Nie rozpoznano lokalizacji: {location_text}"),
-                    "available_miejscowosci": result.get("available_miejscowosci", []),
-                    "hint": result.get("hint", "Podaj nazwę miasta lub dzielnicy."),
-                    "original_input": location_text,
-                }
-        except Exception as e:
-            logger.error(f"Resolve location error: {e}")
-            return {"resolved": False, "error": str(e)}
+        results = []
 
-    async def _validate_location_combination(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate if miejscowość + dzielnica combination is correct.
+        # === STEP 1: Exact match across admin levels ===
 
-        IMPORTANT: Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina!
-        Use this when user provides miasto and dzielnica separately.
+        # 1a. Dzielnica (District nodes → City via BELONGS_TO)
+        if not level or level == "dzielnica":
+            q = "MATCH (d:District)-[:BELONGS_TO]->(c:City) WHERE toLower(d.name) = toLower($name)"
+            p = {"name": name}
+            if parent_name:
+                q += " AND toLower(c.name) = toLower($parent_name)"
+                p["parent_name"] = parent_name
+            q += """
+                OPTIONAL MATCH (parcel:Parcel)-[:LOCATED_IN]->(d)
+                RETURN d.name as dzielnica, c.name as gmina, count(parcel) as parcel_count
+                ORDER BY parcel_count DESC
+            """
+            try:
+                for r in await neo4j.run(q, p):
+                    results.append({
+                        "level": "dzielnica", "dzielnica": r["dzielnica"],
+                        "gmina": r["gmina"], "parcel_count": r["parcel_count"],
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations dzielnica query error: {e}")
+
+        # 1b. Gmina (from Parcel DISTINCT)
+        if not level or level in ("gmina", "miejscowosc"):
+            try:
+                q = """
+                    MATCH (p:Parcel) WHERE toLower(p.gmina) = toLower($name)
+                    WITH p.gmina as gmina, p.powiat as powiat, p.wojewodztwo as woj, count(p) as cnt
+                    RETURN DISTINCT gmina, powiat, woj, cnt
+                """
+                for r in await neo4j.run(q, {"name": name}):
+                    results.append({
+                        "level": "gmina", "gmina": r["gmina"],
+                        "powiat": r["powiat"], "wojewodztwo": r["woj"],
+                        "parcel_count": r["cnt"],
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations gmina query error: {e}")
+
+        # 1c. Powiat
+        if not level or level == "powiat":
+            try:
+                q = """
+                    MATCH (p:Parcel) WHERE toLower(p.powiat) = toLower($name)
+                    WITH p.powiat as powiat, p.wojewodztwo as woj, count(p) as cnt
+                    RETURN DISTINCT powiat, woj, cnt
+                """
+                for r in await neo4j.run(q, {"name": name}):
+                    results.append({
+                        "level": "powiat", "powiat": r["powiat"],
+                        "wojewodztwo": r["woj"], "parcel_count": r["cnt"],
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations powiat query error: {e}")
+
+        # 1d. Województwo
+        if not level or level == "wojewodztwo":
+            try:
+                q = """
+                    MATCH (p:Parcel) WHERE toLower(p.wojewodztwo) = toLower($name)
+                    WITH p.wojewodztwo as woj, count(p) as cnt
+                    RETURN DISTINCT woj, cnt
+                """
+                for r in await neo4j.run(q, {"name": name}):
+                    results.append({
+                        "level": "wojewodztwo", "wojewodztwo": r["woj"],
+                        "parcel_count": r["cnt"],
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations wojewodztwo query error: {e}")
+
+        # === STEP 2: CONTAINS / partial match (if no exact match) ===
+        if not results:
+            try:
+                q = """
+                    MATCH (d:District)-[:BELONGS_TO]->(c:City)
+                    WHERE toLower(d.name) CONTAINS toLower($name)
+                       OR toLower($name) CONTAINS toLower(d.name)
+                    OPTIONAL MATCH (parcel:Parcel)-[:LOCATED_IN]->(d)
+                    RETURN d.name as dzielnica, c.name as gmina, count(parcel) as parcel_count
+                    ORDER BY parcel_count DESC
+                    LIMIT 10
+                """
+                for r in await neo4j.run(q, {"name": name}):
+                    results.append({
+                        "level": "dzielnica", "dzielnica": r["dzielnica"],
+                        "gmina": r["gmina"], "parcel_count": r["parcel_count"],
+                        "match": "partial",
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations partial query error: {e}")
+
+        # === STEP 3: Fulltext search (typos, missing Polish chars) ===
+        if not results:
+            try:
+                q = """
+                    CALL db.index.fulltext.queryNodes('district_names_ft', $search)
+                    YIELD node, score WHERE score > 0.5
+                    MATCH (node)-[:BELONGS_TO]->(c:City)
+                    OPTIONAL MATCH (parcel:Parcel)-[:LOCATED_IN]->(node)
+                    RETURN node.name as dzielnica, c.name as gmina,
+                           count(parcel) as parcel_count, score
+                    ORDER BY score DESC LIMIT 5
+                """
+                for r in await neo4j.run(q, {"search": f"{name}~"}):
+                    results.append({
+                        "level": "dzielnica", "dzielnica": r["dzielnica"],
+                        "gmina": r["gmina"], "parcel_count": r["parcel_count"],
+                        "match": "fuzzy", "score": round(r["score"], 2),
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations fulltext error: {e}")
+
+        # === STEP 4: Vector search (semantic — colloquial names) ===
+        if not results:
+            try:
+                from app.services.embedding_service import EmbeddingService
+                embedding = EmbeddingService.encode(name)
+                q = """
+                    CALL db.index.vector.queryNodes('location_name_embedding_idx', 5, $emb)
+                    YIELD node, score WHERE score >= 0.7
+                    RETURN node.canonical_name as canonical,
+                           node.maps_to_district as dzielnica,
+                           node.maps_to_gmina as gmina, score
+                    ORDER BY score DESC
+                """
+                for r in await neo4j.run(q, {"emb": embedding}):
+                    results.append({
+                        "level": "dzielnica", "dzielnica": r["dzielnica"],
+                        "gmina": r["gmina"], "match": "semantic",
+                        "canonical_name": r["canonical"],
+                        "score": round(r["score"], 2),
+                    })
+            except Exception as e:
+                logger.debug(f"search_locations vector error: {e}")
+
+        return {
+            "query": name,
+            "results": results[:20],
+            "count": len(results),
+            "note": (
+                "Przejrzyj wyniki i potwierdź z użytkownikiem. "
+                "Jeśli brak wyników — dopytaj użytkownika o powiat/gminę/miejscowość. "
+                "Następnie użyj confirm_location z dokładnymi wartościami."
+            ),
+        }
+
+    async def _confirm_location(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate chosen location against DB, save to state, get centroid.
+
+        Accepts any combination of hierarchy levels. At least one required.
+        Does NOT do linguistic processing — expects exact DB values from search_locations.
         """
+        woj = params.get("wojewodztwo")
+        powiat = params.get("powiat")
+        gmina = params.get("gmina")
         miejscowosc = params.get("miejscowosc")
         dzielnica = params.get("dzielnica")
-        gmina = params.get("gmina")
 
-        if not dzielnica:
-            return {"error": "Podaj dzielnicę do walidacji"}
+        if not any([woj, powiat, gmina, miejscowosc, dzielnica]):
+            return {"error": "Podaj przynajmniej jeden poziom hierarchii"}
 
-        try:
-            result = await graph_service.validate_location_combination(
-                miejscowosc=miejscowosc,
-                dzielnica=dzielnica,
-                gmina=gmina
+        # Build dynamic validation query
+        conditions = []
+        q_params = {}
+        if woj:
+            conditions.append("p.wojewodztwo = $woj")
+            q_params["woj"] = woj
+        if powiat:
+            conditions.append("p.powiat = $powiat")
+            q_params["powiat"] = powiat
+        if gmina:
+            conditions.append("p.gmina = $gmina")
+            q_params["gmina"] = gmina
+        if dzielnica:
+            conditions.append(
+                "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dz_prefix)"
             )
+            q_params["dzielnica"] = dzielnica
+            q_params["dz_prefix"] = dzielnica + " "
 
-            if result.get("valid"):
-                return {
-                    "valid": True,
-                    "miejscowosc": result.get("miejscowosc"),
-                    "dzielnica": result.get("dzielnica"),
-                    "gmina": result.get("gmina"),
-                    "parcel_count": result.get("parcel_count", 0),
-                    "message": f"Kombinacja poprawna: {result.get('dzielnica')} w {result.get('miejscowosc')}",
-                }
-            else:
-                return {
-                    "valid": False,
-                    "error": result.get("error"),
-                    "suggestion": result.get("suggestion"),
-                    "note": "Dzielnica należy do MIEJSCOWOŚCI, nie do gminy!",
-                }
+        where = " AND ".join(conditions)
+        try:
+            check = await neo4j.run(
+                f"MATCH (p:Parcel) WHERE {where} RETURN count(p) as cnt", q_params
+            )
+            parcel_count = check[0]["cnt"] if check else 0
         except Exception as e:
-            logger.error(f"Validate location combination error: {e}")
-            return {"valid": False, "error": str(e)}
+            logger.error(f"confirm_location count query error: {e}")
+            return {"error": f"Błąd zapytania do bazy: {e}"}
+
+        if parcel_count == 0:
+            parts = [f"{k}={v}" for k, v in params.items() if v]
+            return {
+                "error": f"Nie znaleziono działek dla: {', '.join(parts)}. "
+                         "Sprawdź nazwy lub dopytaj użytkownika.",
+            }
+
+        # Get centroid for spatial search
+        centroid = None
+        try:
+            centroid = await graph_service.get_location_centroid(
+                dzielnica=dzielnica, gmina=gmina
+            )
+        except Exception:
+            pass
+
+        # Save to state (LocationPreference)
+        from app.memory.schemas.workflow import LocationPreference
+        funnel = self.state.workflow.funnel_progress
+        if funnel.location is None:
+            funnel.location = LocationPreference()
+
+        loc = funnel.location
+        if woj:
+            loc.wojewodztwo = woj
+        if powiat:
+            loc.powiat = powiat
+        if gmina:
+            loc.gmina = gmina
+        if miejscowosc:
+            loc.miejscowosc = miejscowosc
+        elif gmina:
+            loc.miejscowosc = gmina  # MVP fallback: city is both gmina and miejscowosc
+        if dzielnica:
+            loc.dzielnica = dzielnica
+        loc.validated = True
+        funnel.location_collected = True
+
+        # Build display string
+        display_parts = [x for x in [dzielnica, miejscowosc or gmina, powiat, woj] if x]
+        display = ", ".join(display_parts) if display_parts else "?"
+
+        logger.info(
+            f"Location confirmed: {display} ({parcel_count} parcels), "
+            f"saved to state: gmina={gmina}, dzielnica={dzielnica}"
+        )
+
+        return {
+            "confirmed": True,
+            "location": {k: v for k, v in params.items() if v},
+            "parcel_count": parcel_count,
+            "display_location": display,
+            "centroid": centroid,
+            "note": (
+                f"Lokalizacja '{display}' zapisana ({parcel_count} działek). "
+                "Kolejne narzędzia użyją jej automatycznie."
+            ),
+        }
 
     async def _resolve_entity(self, params: Dict[str, Any], state: AgentState) -> Dict[str, Any]:
         """
@@ -2290,7 +2486,11 @@ class ToolExecutor:
             return {"error": str(e)}
 
     async def _refine_search_preferences(self, params: Dict[str, Any]) -> ToolResult:
-        """Refine existing search preferences with updates."""
+        """Refine existing search preferences with non-location updates.
+
+        Location changes go through search_locations + confirm_location.
+        This tool only handles filter/criteria updates.
+        """
         updates = params.get("updates", {})
         reason = params.get("reason", "")
 
@@ -2298,13 +2498,27 @@ class ToolExecutor:
         if perceived is None:
             return {"error": "Brak preferencji do modyfikacji"}, {}
 
-        # Modify perceived in-place and return the full dict as a 2-level update
+        # Apply updates
         for key, value in updates.items():
             perceived[key] = value
+
+        # Sync location from state (in case confirm_location was called)
+        validated = self.state.workflow.funnel_progress.location
+        if validated and validated.validated:
+            if validated.gmina:
+                perceived["gmina"] = validated.gmina
+            if validated.dzielnica:
+                perceived["miejscowosc"] = validated.dzielnica
 
         state_updates = {
             "search_state.perceived_preferences": perceived,
         }
+
+        # Also update approved_preferences if they exist (so execute_search sees changes)
+        approved = self._search_state.approved_preferences
+        if approved is not None:
+            approved.update(perceived)
+            state_updates["search_state.approved_preferences"] = approved
 
         return {
             "status": "preferences_refined",

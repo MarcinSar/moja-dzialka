@@ -64,22 +64,20 @@ class LocationPreference(BaseModel):
         Args:
             dzielnica: District name (e.g., "Osowa")
             miejscowosc: Settlement name (e.g., "Gdańsk") - REQUIRED
-            gmina: Optional gmina for context (defaults to miejscowość in MVP)
+            gmina: Optional gmina for context — must be explicitly provided
+                   or resolved via confirm_location
         """
         self.dzielnica = dzielnica
         self.miejscowosc = miejscowosc
         if gmina:
             self.gmina = gmina
-        elif not self.gmina and miejscowosc:
-            # In MVP: gmina = miejscowość
-            self.gmina = miejscowosc
 
     def clear_dzielnica(self):
         """Clear dzielnica when miejscowość changes."""
         self.dzielnica = None
 
     def update_from_resolved(self, resolved: Dict) -> None:
-        """Update from resolve_location() result."""
+        """Update from location resolution result dict."""
         if resolved.get("resolved"):
             if resolved.get("gmina"):
                 self.gmina = resolved["gmina"]

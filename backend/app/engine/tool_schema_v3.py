@@ -652,25 +652,56 @@ TOOLS_V3_CONTEXT = [
 
 TOOLS_V3_LOCATION = [
     ToolDefinitionV3(
-        name="resolve_location",
-        description="Rozwiąż nazwę lokalizacji na gmina/miejscowosc/dzielnica.",
+        name="search_locations",
+        description="Przeszukaj bazę lokalizacji (dzielnice, gminy, powiaty, województwa).",
         input_schema={
             "type": "object",
             "properties": {
-                "query": {
+                "name": {
                     "type": "string",
-                    "description": "Nazwa do rozwiązania (np. 'Osowa', 'Matemblewo')"
+                    "description": "Nazwa lokalizacji w mianowniku"
+                },
+                "level": {
+                    "type": "string",
+                    "description": "Poziom: dzielnica/gmina/powiat/wojewodztwo"
+                },
+                "parent_name": {
+                    "type": "string",
+                    "description": "Nazwa nadrzędnej lokalizacji"
                 },
             },
-            "required": ["query"],
+            "required": ["name"],
         },
         reliability=ReliabilityScore.HIGH,
         cost=CostIndicator.CHEAP,
         policies=[PolicyTag.FREE_TIER],
         when_to_use="Gdy użytkownik podaje nazwę lokalizacji",
-        when_not_to_use="Dla standardowych nazw miast (Gdańsk, Gdynia, Sopot)",
+        when_not_to_use="",
         composition=CompositionHint(
-            after=["propose_search_preferences"],
+            after=["confirm_location"],
+        ),
+        category="location",
+    ),
+    ToolDefinitionV3(
+        name="confirm_location",
+        description="Potwierdź i zapisz lokalizację (po search_locations i potwierdzeniu użytkownika).",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "gmina": {"type": "string"},
+                "dzielnica": {"type": "string"},
+                "powiat": {"type": "string"},
+                "wojewodztwo": {"type": "string"},
+            },
+            "required": [],
+        },
+        reliability=ReliabilityScore.HIGH,
+        cost=CostIndicator.CHEAP,
+        policies=[PolicyTag.FREE_TIER],
+        when_to_use="Po potwierdzeniu lokalizacji przez użytkownika",
+        when_not_to_use="Bez wcześniejszego search_locations",
+        composition=CompositionHint(
+            before=["propose_search_preferences"],
         ),
         category="location",
     ),

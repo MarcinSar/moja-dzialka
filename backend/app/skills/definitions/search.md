@@ -25,6 +25,8 @@ tools:
     - propose_filter_refinement
     - get_parcel_full_context
     - get_parcel_neighborhood
+    - search_locations
+    - confirm_location
   restricted:
     - capture_contact_info
 
@@ -65,7 +67,15 @@ Wykonać efektywne wyszukiwanie działek i zaprezentować wyniki użytkownikowi 
 - Jeśli 0 wyników: zaproponuj poluzowanie kryteriów
 - Użyj `propose_filter_refinement` z sugestiami
 
-### 4. Iteracja
+### 4. Zmiana lokalizacji
+- Jeśli użytkownik chce zmienić lokalizację (np. "pokaż Oliwę zamiast"):
+  1. Wywołaj `search_locations(name="Oliwa")`
+  2. Potwierdź z użytkownikiem
+  3. Wywołaj `confirm_location(gmina="Gdańsk", dzielnica="Oliwa")`
+  4. Wywołaj `approve_search_preferences` → `execute_search`
+- NIE używaj `refine_search_preferences` do zmiany lokalizacji!
+
+### 5. Iteracja
 - Jeśli użytkownik chce innych wyników: `refine_search`
 - Jeśli użytkownik chce więcej szczegółów: przekaż do evaluation
 

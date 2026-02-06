@@ -259,9 +259,9 @@ class Animator {
     // ── Head micro-movements ──
     this.nextHeadShift -= dt;
     if (this.nextHeadShift <= 0) {
-      this.nextHeadShift = 1.5 + Math.random() * 3;
-      this.headTargetX = (Math.random() - 0.5) * 0.06;
-      this.headTargetY = (Math.random() - 0.5) * 0.04;
+      this.nextHeadShift = 1.0 + Math.random() * 2;
+      this.headTargetX = (Math.random() - 0.5) * 0.10;
+      this.headTargetY = (Math.random() - 0.5) * 0.08;
     }
     this.headTiltX += (this.headTargetX - this.headTiltX) * dt * 1.5;
     this.headTiltY += (this.headTargetY - this.headTiltY) * dt * 1.5;
@@ -437,8 +437,8 @@ function FaceMeshScene({ compact = false }: { compact?: boolean }) {
     applyExpressions(anim, base, animator.w);
 
     // Breathing — chest-like motion (Y shift + subtle Z expansion)
-    const breathe = Math.sin(t * 0.8) * 0.008;
-    const breatheZ = Math.sin(t * 0.8 + 0.3) * 0.003;
+    const breathe = Math.sin(t * 0.8) * 0.018;
+    const breatheZ = Math.sin(t * 0.8 + 0.3) * 0.008;
     for (let i = 0; i < anim.length; i += 3) {
       anim[i + 1] += breathe;
       anim[i + 2] += breatheZ;
@@ -446,7 +446,7 @@ function FaceMeshScene({ compact = false }: { compact?: boolean }) {
 
     // Per-vertex organic micro-jitter for "alive" feeling
     // Uses deterministic noise based on vertex index + time
-    const jitterAmt = 0.0012;
+    const jitterAmt = 0.003;
     for (let i = 0; i < anim.length; i += 3) {
       const vi = i / 3;
       // Low-frequency per-vertex noise (different phase per vertex)
@@ -456,6 +456,13 @@ function FaceMeshScene({ compact = false }: { compact?: boolean }) {
       anim[i]     += nx * jitterAmt;
       anim[i + 1] += ny * jitterAmt;
       anim[i + 2] += nz * jitterAmt * 0.5;
+    }
+
+    // Elastic scale pulsing + gentle float/sway on the group
+    if (groupRef.current) {
+      groupRef.current.scale.setScalar(1 + Math.sin(t * 0.6) * 0.02);
+      groupRef.current.position.y = Math.sin(t * 0.4) * 0.03;
+      groupRef.current.position.x = Math.sin(t * 0.25) * 0.015;
     }
 
     // Upload positions to GPU
@@ -529,11 +536,11 @@ function FaceMeshScene({ compact = false }: { compact?: boolean }) {
 
         {/* Layer 4: Scan line (thin luminous plane) */}
         <mesh ref={scanRef} position={[0, 0, 0.05]}>
-          <planeGeometry args={[2.4, 0.004]} />
+          <planeGeometry args={[2.8, 0.004]} />
           <meshBasicMaterial
             color={MOOD[mood].color}
             transparent
-            opacity={0.25}
+            opacity={0.4}
             blending={THREE.AdditiveBlending}
             depthWrite={false}
           />

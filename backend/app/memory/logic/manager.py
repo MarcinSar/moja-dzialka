@@ -169,92 +169,20 @@ class MemoryManager:
     def _extract_info_from_message(self, state: AgentState, content: str) -> None:
         """Extract structured information from user message.
 
-        NOTE (2026-01-25): This method does basic keyword matching for quick detection.
-        Full location resolution should be done via agent tools (resolve_location).
-        The hardcoded lists below are FALLBACK only - agent should use dynamic queries.
+        LOCATION: Not extracted here — the agent handles it via search_locations +
+        confirm_location tools. Passive regex extraction of locations from chat
+        text is too error-prone (false positives).
+
+        This method only extracts simple numeric patterns (budget, size) and
+        preference keywords that are unambiguous.
         """
         content_lower = content.lower()
         progress = state.workflow.funnel_progress
         profile = state.semantic.buyer_profile
 
-        # =================================================================
-        # LOCATION EXTRACTION (basic keyword matching - fallback only)
-        # Agent should use resolve_location() tool for full validation!
-        # =================================================================
-
         # Initialize LocationPreference if not exists
         if progress.location is None:
             progress.location = LocationPreference()
-
-        # Common Polish cities (MVP: Trójmiasto)
-        # NOTE: This is just for basic detection. Agent should use get_available_locations()
-        # to get the actual list from the database!
-        cities = ["gdańsk", "gdynia", "sopot"]
-        for city in cities:
-            if city in content_lower:
-                # Update both old field (backward compat) and new LocationPreference
-                progress.known_location = city.title()
-                progress.location_collected = True
-                progress.location.gmina = city.title()
-                progress.location.miejscowosc = city.title()  # In MVP: gmina = miejscowosc
-                progress.location.validated = False  # Needs agent validation
-
-                if city.title() not in profile.preferred_cities:
-                    profile.preferred_cities.append(city.title())
-
-        # Common districts (basic detection only - not a complete list!)
-        # NOTE: Agent should use get_districts_in_miejscowosc() for full list!
-        # NOTE: District belongs to MIEJSCOWOŚĆ, not gmina!
-        common_districts = {
-            # Gdańsk districts (partial list)
-            "osowa": ("Gdańsk", "Gdańsk"),  # (gmina, miejscowosc)
-            "jasień": ("Gdańsk", "Gdańsk"),
-            "oliwa": ("Gdańsk", "Gdańsk"),
-            "wrzeszcz": ("Gdańsk", "Gdańsk"),
-            "łostowice": ("Gdańsk", "Gdańsk"),
-            "matemblewo": ("Gdańsk", "Gdańsk"),
-            "przymorze": ("Gdańsk", "Gdańsk"),
-            "zaspa": ("Gdańsk", "Gdańsk"),
-            "brzeźno": ("Gdańsk", "Gdańsk"),
-            "stogi": ("Gdańsk", "Gdańsk"),
-            "śródmieście": ("Gdańsk", "Gdańsk"),
-            "kokoszki": ("Gdańsk", "Gdańsk"),
-            # Gdynia districts (partial list)
-            "orłowo": ("Gdynia", "Gdynia"),
-            "redłowo": ("Gdynia", "Gdynia"),
-            "wiczlino": ("Gdynia", "Gdynia"),
-            "mały kack": ("Gdynia", "Gdynia"),
-            "wielki kack": ("Gdynia", "Gdynia"),
-            "pogórze": ("Gdynia", "Gdynia"),
-            # Sopot districts (partial list)
-            "górny sopot": ("Sopot", "Sopot"),
-            "dolny sopot": ("Sopot", "Sopot"),
-        }
-
-        for district, (gmina, miejscowosc) in common_districts.items():
-            if district in content_lower:
-                # Update old field (backward compat)
-                progress.known_location = district.title()
-                progress.location_collected = True
-
-                # Update LocationPreference with full hierarchy
-                # dzielnica belongs to miejscowosc!
-                progress.location.set_dzielnica(
-                    dzielnica=district.title(),
-                    miejscowosc=miejscowosc,
-                    gmina=gmina
-                )
-                progress.location.validated = False  # Needs agent validation
-
-                if district.title() not in profile.preferred_districts:
-                    profile.preferred_districts.append(district.title())
-                if gmina not in profile.preferred_cities:
-                    profile.preferred_cities.append(gmina)
-
-        # Store hint that agent should validate with resolve_location
-        if progress.location and (progress.location.gmina or progress.location.dzielnica):
-            if "location_needs_validation" not in state.working.temp_vars:
-                state.working.temp_vars["location_needs_validation"] = True
 
         # Budget extraction (simple patterns)
         import re

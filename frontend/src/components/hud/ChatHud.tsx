@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronUp } from 'lucide-react';
 import { useChatStore } from '@/stores/chatStore';
+import { useParcelRevealStore } from '@/stores/parcelRevealStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { ChatBubble } from './ChatBubble';
 
@@ -11,9 +12,11 @@ export function ChatHud() {
   const messages = useChatStore((s) => s.messages);
   const isAgentTyping = useChatStore((s) => s.isAgentTyping);
   const currentStreamingId = useChatStore((s) => s.currentStreamingId);
+  const parcels = useParcelRevealStore((s) => s.parcels);
   const [isExpanded, setIsExpanded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const isMobile = useIsMobile();
+  const hasResults = parcels.length > 0;
 
   // Auto-scroll when new messages arrive
   useEffect(() => {
@@ -36,7 +39,7 @@ export function ChatHud() {
       className={`absolute flex flex-col justify-end pointer-events-none ${
         isMobile
           ? 'left-0 right-0 px-3 bottom-16 max-h-[40vh]'
-          : 'right-4 bottom-20 w-[400px] max-h-[55vh]'
+          : `right-4 w-[400px] max-h-[55vh] ${hasResults ? 'bottom-[280px]' : 'bottom-20'}`
       }`}
       onHoverStart={isMobile ? undefined : () => setIsHovered(true)}
       onHoverEnd={isMobile ? undefined : () => setIsHovered(false)}

@@ -252,7 +252,7 @@ class PropertyAdvisorAgent:
         if not tools:
             # Safe defaults instead of ALL tools
             logger.warning(f"No matching tools for skill {skill_name}, using safe defaults")
-            SAFE_DEFAULTS = {"resolve_location", "get_available_locations", "propose_search_preferences"}
+            SAFE_DEFAULTS = {"search_locations", "confirm_location", "get_available_locations", "propose_search_preferences"}
             tools = [t for t in AGENT_TOOLS if t["name"] in SAFE_DEFAULTS]
 
         # 4. Build system prompt

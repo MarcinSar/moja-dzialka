@@ -44,6 +44,8 @@ export function InputBar() {
   const messages = useChatStore((s) => s.messages);
   const isAgentTyping = useChatStore((s) => s.isAgentTyping);
   const activities = useChatStore((s) => s.activities);
+  const parcels = useParcelRevealStore((s) => s.parcels);
+  const hasResults = parcels.length > 0;
 
   const showSuggestions = messages.length === 0;
 
@@ -98,7 +100,7 @@ export function InputBar() {
       className={`absolute z-[20] pointer-events-auto ${
         isMobile
           ? 'left-3 right-3 bottom-2 pb-safe'
-          : 'bottom-4 right-4 w-[400px]'
+          : `right-4 w-[400px] ${hasResults ? 'bottom-[200px]' : 'bottom-4'}`
       }`}
       style={isMobile && keyboardHeight > 0 ? { bottom: keyboardHeight + 8 } : undefined}
     >

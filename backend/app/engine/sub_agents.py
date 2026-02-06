@@ -94,7 +94,8 @@ AGENT_CONFIGS: Dict[AgentType, AgentConfig] = {
         description="Zbiera preferencje i wymagania użytkownika",
         model=DEFAULT_MODEL_CONFIG["discovery"],
         tools=[
-            "resolve_location",
+            "search_locations",
+            "confirm_location",
             "get_available_locations",
             "get_districts_in_miejscowosc",
             "propose_search_preferences",

@@ -284,8 +284,19 @@ class AgentCoordinator:
         funnel = state.workflow.funnel_progress
         search = state.working.search_state
 
+        # Location confirmation — save validated location to funnel state
+        if tool_name == "confirm_location":
+            if result.get("confirmed"):
+                funnel.location_collected = True
+                # Location object is already updated by tool_executor._confirm_location()
+                # Just ensure funnel flags are synced
+                logger.info(
+                    f"Location confirmed: {result.get('display_location', '?')} "
+                    f"({result.get('parcel_count', '?')} parcels)"
+                )
+
         # Search tools - track funnel progress + sync working state
-        if tool_name == "propose_search_preferences":
+        elif tool_name == "propose_search_preferences":
             funnel.preferences_proposed = True
             if not search.preferences_proposed:
                 search.preferences_proposed = True

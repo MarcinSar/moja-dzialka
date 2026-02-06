@@ -2,9 +2,9 @@
 Hybrid parcel search service.
 
 Architecture:
-- Neo4j (graph) = PRIMARY source for filtering and finding parcels
-- PostGIS = Spatial queries for geometry-based searches + GeoJSON generation
-- Milvus = Vector similarity for "find similar to X" and preference-based re-ranking
+- Neo4j (graph) = PRIMARY source for filtering and finding parcels via relationships
+- PostGIS = Spatial queries for geometry-based searches (radius from point)
+- Neo4j GraphRAG = Semantic search via text embeddings (512-dim) + graph constraints
 
 Uses Reciprocal Rank Fusion (RRF) to combine rankings when multiple sources used.
 """
@@ -17,7 +17,6 @@ import asyncio
 from loguru import logger
 
 from app.services.spatial_service import spatial_service, SpatialSearchParams
-from app.services.vector_service import vector_service, VectorSearchResult
 from app.services.graph_service import graph_service, ParcelSearchCriteria
 
 
@@ -88,6 +87,9 @@ class SearchPreferences:
 
     # === SIMILARITY SEARCH ===
     reference_parcel_id: Optional[str] = None  # For "find similar to X" queries
+
+    # === SEMANTIC SEARCH (GraphRAG via Neo4j text embeddings) ===
+    query_text: Optional[str] = None  # Natural language description for embedding search
 
     # === LEGACY WEIGHTS (for backwards compatibility) ===
     quietness_weight: float = 0.5
@@ -180,12 +182,12 @@ class SearchResult:
 
 class HybridSearchService:
     """
-    Hybrid search combining graph, spatial, and vector queries.
+    Hybrid search combining graph, spatial, and semantic queries.
 
     Architecture:
     - Graph (Neo4j) = PRIMARY - always runs, uses rich relationships
-    - Spatial (PostGIS) = For geometry-based searches (radius from point)
-    - Vector (Milvus) = For "find similar" and preference-based re-ranking
+    - Spatial (PostGIS) = Geometry-based searches (radius from point)
+    - Semantic (Neo4j GraphRAG) = Text embedding similarity + graph constraints
 
     Uses Reciprocal Rank Fusion (RRF) to combine results when multiple sources used.
     """
@@ -193,10 +195,10 @@ class HybridSearchService:
     # RRF constant (typically 60)
     RRF_K = 60
 
-    # Weights for each source (Graph is PRIMARY)
-    GRAPH_WEIGHT = 0.5   # PRIMARY source
-    SPATIAL_WEIGHT = 0.3  # Geometry-based when location provided
-    VECTOR_WEIGHT = 0.2   # Re-ranking/similarity
+    # Weights for each source
+    GRAPH_WEIGHT = 0.45    # PRIMARY: Neo4j property + relationship matching
+    SPATIAL_WEIGHT = 0.20  # PostGIS distance-ordered by centroid proximity
+    SEMANTIC_WEIGHT = 0.35 # GraphRAG text embedding similarity
 
     async def search(
         self,
@@ -240,11 +242,15 @@ class HybridSearchService:
         else:
             tasks.append(empty_result())
 
-        # 3. Vector similarity search (for "find similar" or preference re-ranking)
-        if preferences.reference_parcel_id:
-            tasks.append(self._vector_search_similar(preferences, limit * 2))
+        # 3. Semantic search (Neo4j GraphRAG - text embeddings + graph constraints)
+        has_semantic_input = (preferences.query_text or preferences.quietness_categories
+                             or preferences.nature_categories or preferences.miejscowosc
+                             or preferences.gmina)
+        if has_semantic_input:
+            tasks.append(self._graphrag_search(preferences, limit * 2))
+        elif preferences.reference_parcel_id:
+            tasks.append(self._graph_embedding_similar(preferences, limit * 2))
         else:
-            # Skip vector search if no reference - graph handles preferences better
             tasks.append(empty_result())
 
         # Execute all searches
@@ -252,21 +258,21 @@ class HybridSearchService:
 
         graph_results = results[0] if not isinstance(results[0], Exception) else []
         spatial_results = results[1] if not isinstance(results[1], Exception) else []
-        vector_results = results[2] if not isinstance(results[2], Exception) else []
+        semantic_results = results[2] if not isinstance(results[2], Exception) else []
 
         # Log any errors
         for i, r in enumerate(results):
             if isinstance(r, Exception):
-                source_name = ["graph", "spatial", "vector"][i]
+                source_name = ["graph", "spatial", "semantic"][i]
                 logger.error(f"Search task {source_name} failed: {r}")
 
         # If only graph results, return them directly without RRF
-        if not spatial_results and not vector_results:
+        if not spatial_results and not semantic_results:
             combined = self._convert_graph_to_results(graph_results)
         else:
             # Combine using RRF when multiple sources
             combined = self._combine_with_rrf(
-                spatial_results, vector_results, graph_results
+                spatial_results, semantic_results, graph_results
             )
 
         # Take top results
@@ -277,7 +283,7 @@ class HybridSearchService:
             combined = await self._enrich_results(combined)
 
         logger.info(f"Hybrid search returned {len(combined)} results "
-                   f"(graph={len(graph_results)}, spatial={len(spatial_results)}, vector={len(vector_results)})")
+                   f"(graph={len(graph_results)}, spatial={len(spatial_results)}, semantic={len(semantic_results)})")
         return combined
 
     def _convert_graph_to_results(self, graph_results: List[Dict]) -> List[SearchResult]:
@@ -336,71 +342,74 @@ class HybridSearchService:
 
         return results
 
-    async def _vector_search_similar(
+    async def _graphrag_search(
         self,
         preferences: SearchPreferences,
         limit: int
     ) -> List[Dict[str, Any]]:
-        """Execute vector similarity search."""
-        results = await vector_service.search_similar(
+        """GraphRAG: text embedding similarity (512-dim) + graph constraints via Neo4j."""
+        from app.services.embedding_service import EmbeddingService
+
+        query_text = preferences.query_text
+        if not query_text:
+            # Synthesize from preference fields
+            parts = []
+            if preferences.miejscowosc:
+                parts.append(f"Działka w {preferences.miejscowosc}")
+            elif preferences.gmina:
+                parts.append(f"Działka w {preferences.gmina}")
+            if preferences.quietness_categories:
+                if any(c in preferences.quietness_categories for c in ["bardzo_cicha", "cicha"]):
+                    parts.append("cicha spokojna okolica")
+            if preferences.nature_categories:
+                if any(c in preferences.nature_categories for c in ["bardzo_zielona", "zielona"]):
+                    parts.append("blisko natury lasu zieleni")
+            if preferences.build_status == "niezabudowana":
+                parts.append("niezabudowana pod budowę domu")
+            if preferences.ownership_type == "prywatna":
+                parts.append("prywatna do kupienia")
+            query_text = ". ".join(parts) if parts else "działka budowlana pod dom"
+
+        query_embedding = EmbeddingService.encode(query_text)
+
+        results = await graph_service.graphrag_search(
+            query_embedding=query_embedding,
+            ownership_type=preferences.ownership_type,
+            build_status=preferences.build_status,
+            size_category=preferences.size_category,
+            gmina=preferences.gmina,
+            dzielnica=preferences.miejscowosc,
+            limit=limit,
+        )
+
+        for i, r in enumerate(results):
+            r["_source"] = "graphrag"
+            r["_rank"] = i + 1
+            r["id_dzialki"] = r.get("id")
+            r["miejscowosc"] = r.get("dzielnica") or r.get("district_name")
+            r["centroid_lat"] = r.get("lat")
+            r["centroid_lon"] = r.get("lon")
+            r["similarity_score"] = r.get("vector_score")
+        return results
+
+    async def _graph_embedding_similar(
+        self,
+        preferences: SearchPreferences,
+        limit: int
+    ) -> List[Dict[str, Any]]:
+        """Find similar parcels using FastRP graph embeddings (256-dim) via Neo4j."""
+        results = await graph_service.find_similar_by_graph_embedding(
             parcel_id=preferences.reference_parcel_id,
-            top_k=limit,
-            min_area=preferences.min_area,
-            max_area=preferences.max_area,
-            gmina=preferences.gmina,
-            has_mpzp=preferences.has_mpzp,
+            limit=limit,
         )
-
-        # Convert to dict format
-        return [
-            {
-                "id_dzialki": r.parcel_id,
-                "similarity_score": r.similarity_score,
-                "gmina": r.gmina,
-                "area_m2": r.area_m2,
-                "quietness_score": r.quietness_score,
-                "nature_score": r.nature_score,
-                "accessibility_score": r.accessibility_score,
-                "_source": "vector",
-                "_rank": i + 1,
-            }
-            for i, r in enumerate(results)
-        ]
-
-    async def _vector_search_preferences(
-        self,
-        preferences: SearchPreferences,
-        limit: int
-    ) -> List[Dict[str, Any]]:
-        """Execute vector search based on preference weights."""
-        pref_dict = {
-            "quietness": preferences.quietness_weight,
-            "nature": preferences.nature_weight,
-            "accessibility": preferences.accessibility_weight,
-        }
-
-        results = await vector_service.search_by_preferences(
-            preferences=pref_dict,
-            top_k=limit,
-            min_area=preferences.min_area,
-            max_area=preferences.max_area,
-            gmina=preferences.gmina,
-        )
-
-        return [
-            {
-                "id_dzialki": r.parcel_id,
-                "similarity_score": r.similarity_score,
-                "gmina": r.gmina,
-                "area_m2": r.area_m2,
-                "quietness_score": r.quietness_score,
-                "nature_score": r.nature_score,
-                "accessibility_score": r.accessibility_score,
-                "_source": "vector",
-                "_rank": i + 1,
-            }
-            for i, r in enumerate(results)
-        ]
+        for i, r in enumerate(results):
+            r["_source"] = "graphrag"
+            r["_rank"] = i + 1
+            r["id_dzialki"] = r.get("id")
+            r["centroid_lat"] = r.get("lat")
+            r["centroid_lon"] = r.get("lon")
+            r["similarity_score"] = r.get("similarity")
+        return results
 
     async def _graph_search(
         self,
@@ -449,14 +458,14 @@ class HybridSearchService:
     def _combine_with_rrf(
         self,
         spatial_results: List[Dict],
-        vector_results: List[Dict],
+        semantic_results: List[Dict],
         graph_results: List[Dict],
     ) -> List[SearchResult]:
         """
         Combine results using Reciprocal Rank Fusion.
 
-        RRF score = sum(weight / (k + rank)) across all sources
-        Graph is PRIMARY so it contributes most to the score.
+        RRF score = sum(weight / (k + rank)) across all sources.
+        Multi-source bonus: parcels found by 2+ sources get a score boost.
         """
         # Collect all parcel IDs with their ranks
         parcel_scores = defaultdict(lambda: {"score": 0.0, "sources": [], "data": {}})
@@ -487,16 +496,30 @@ class HybridSearchService:
                     if key in r and r[key] is not None and existing_data.get(key) is None:
                         existing_data[key] = r[key]
 
-        # Process vector results (for similarity scores)
-        for r in vector_results:
+        # Process semantic results (GraphRAG text embeddings + graph constraints)
+        for r in semantic_results:
             pid = r.get("id_dzialki")
             if pid:
-                rank = r.get("_rank", len(vector_results))
-                parcel_scores[pid]["score"] += self.VECTOR_WEIGHT / (self.RRF_K + rank)
-                parcel_scores[pid]["sources"].append("vector")
-                # Add similarity score from vector search
+                rank = r.get("_rank", len(semantic_results))
+                parcel_scores[pid]["score"] += self.SEMANTIC_WEIGHT / (self.RRF_K + rank)
+                parcel_scores[pid]["sources"].append("semantic")
+                existing_data = parcel_scores[pid]["data"]
+                # Add similarity score from semantic search
                 if "similarity_score" in r and r["similarity_score"] is not None:
-                    parcel_scores[pid]["data"]["similarity_score"] = r["similarity_score"]
+                    existing_data["similarity_score"] = r["similarity_score"]
+                # Fill in any missing fields
+                for key in ["gmina", "miejscowosc", "area_m2", "centroid_lat", "centroid_lon",
+                            "quietness_score", "nature_score", "accessibility_score"]:
+                    if key in r and r[key] is not None and existing_data.get(key) is None:
+                        existing_data[key] = r[key]
+
+        # Multi-source bonus: parcels confirmed by multiple sources rank higher
+        for pid, info in parcel_scores.items():
+            source_count = len(set(info["sources"]))
+            if source_count >= 3:
+                info["score"] *= 1.3  # 30% bonus for confirmation from all 3 sources
+            elif source_count >= 2:
+                info["score"] *= 1.1  # 10% bonus for 2 sources
 
         # Convert to SearchResult objects
         results = []

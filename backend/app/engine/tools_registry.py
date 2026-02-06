@@ -29,7 +29,7 @@ Po użyciu ZAPYTAJ użytkownika: "Czy te preferencje są poprawne?"
                 # === LOKALIZACJA ===
                 "location_description": {
                     "type": "string",
-                    "description": "Opis lokalizacji (np. 'okolice Gdańska', 'gmina Żukowo')"
+                    "description": "Opis lokalizacji (np. 'Wrzeszcz, Gdańsk', 'okolice Osowej', 'gmina Żukowo', 'powiat gdański'). Obsługuje złożone nazwy, deklinacje i prefiksy administracyjne."
                 },
                 "gmina": {
                     "type": "string",
@@ -936,84 +936,102 @@ Zwraca:
         }
     },
     {
-        "name": "resolve_location",
+        "name": "search_locations",
         "description": """
-KLUCZOWE NARZĘDZIE! Rozwiąż tekst lokalizacji do gmina + miejscowość + dzielnica.
+Przeszukaj bazę danych lokalizacji na WSZYSTKICH poziomach hierarchii administracyjnej:
+województwo → powiat → gmina → miejscowość → dzielnica.
 
 KIEDY UŻYWAĆ:
-- User podaje lokalizację tekstem (np. "okolice Osowej", "Orłowo", "Gdańsk")
-- ZAWSZE użyj tego przed propose_search_preferences!
-- Automatycznie wykrywa czy to miejscowość czy dzielnica
+- Gdy użytkownik wspomni jakąkolwiek lokalizację
+- Gdy chcesz sprawdzić czy dana nazwa istnieje w bazie
+- Możesz wywoływać WIELOKROTNIE z różnymi parametrami, żeby zawęzić wyniki
 
-ZWRACA:
-- resolved: true/false
-- gmina: np. "Gdańsk"
-- miejscowosc: np. "Gdańsk" (dzielnica należy do miejscowości!)
-- dzielnica: np. "Osowa" lub null
-- parcel_count: ile działek w tej lokalizacji
+TY (LLM) rozumiesz polską gramatykę! Więc:
+- "we Wrzeszczu" → podaj name="Wrzeszcz" (mianownik)
+- "w Osowej" → podaj name="Osowa"
+- "Gdańsku" → podaj name="Gdańsk"
+- "okolice Matemblewa" → podaj name="Matemblewo"
 
-PRZYKŁADY:
-- "Osowa" → {gmina: "Gdańsk", miejscowosc: "Gdańsk", dzielnica: "Osowa"}
-- "Orłowo" → {gmina: "Gdynia", miejscowosc: "Gdynia", dzielnica: "Orłowo"}
-- "Gdańsk" → {gmina: "Gdańsk", miejscowosc: "Gdańsk", dzielnica: null}
-- "Kartuzy" → {resolved: false, error: "nie w obsługiwanym obszarze"}
+STRATEGIA SZUKANIA:
+- Najpierw szukaj z samą nazwą
+- Jeśli zbyt wiele wyników → zawęź z parent_name (np. gmina lub powiat)
+- Jeśli brak wyników → DOPYTAJ użytkownika o dodatkowe info (powiat? gmina? miasto?)
+- Możesz też użyć get_available_locations lub get_districts_in_miejscowosc
 
-WAŻNE: Dzielnica jest wykrywana automatycznie z bazy - nie trzeba znać miasta!
+Zwraca listę wyników z pełną hierarchią. Potwierdź z użytkownikiem,
+potem użyj confirm_location.
 """,
         "input_schema": {
             "type": "object",
             "properties": {
-                "location_text": {
+                "name": {
                     "type": "string",
-                    "description": "Tekst lokalizacji od użytkownika (np. 'okolice Osowej', 'Orłowo', 'w Gdańsku')"
+                    "description": "Nazwa lokalizacji w mianowniku"
+                },
+                "level": {
+                    "type": "string",
+                    "enum": ["dzielnica", "gmina", "miejscowosc", "powiat", "wojewodztwo"],
+                    "description": "Poziom administracyjny (opcjonalny, zawęża szukanie)"
+                },
+                "parent_name": {
+                    "type": "string",
+                    "description": "Nazwa lokalizacji nadrzędnej (np. 'Gdańsk' by szukać w Gdańsku)"
+                },
+                "parent_level": {
+                    "type": "string",
+                    "enum": ["gmina", "powiat", "wojewodztwo"],
+                    "description": "Poziom lokalizacji nadrzędnej"
                 }
             },
-            "required": ["location_text"]
+            "required": ["name"]
         }
     },
     {
-        "name": "validate_location_combination",
+        "name": "confirm_location",
         "description": """
-Sprawdź czy kombinacja miejscowość + dzielnica jest poprawna.
+Potwierdź i zapisz wybraną lokalizację. Użyj DOKŁADNYCH wartości z wyników search_locations.
 
-HIERARCHIA:
-- Dzielnica należy do MIEJSCOWOŚCI, nie do gminy!
-- Osowa należy do Gdańska
-- Orłowo należy do Gdyni
-- Niepoprawne: miejscowość="Gdańsk", dzielnica="Orłowo"
+Przyjmuje DOWOLNĄ kombinację poziomów hierarchii administracyjnej:
+- województwo → powiat → gmina → miejscowość → dzielnica
+- Możesz podać tylko powiat, albo gmina+dzielnica, albo pełną hierarchię
+- Im więcej podasz, tym precyzyjniejsze będzie wyszukiwanie
 
 KIEDY UŻYWAĆ:
-- User podał miasto i dzielnicę osobno
-- Weryfikacja przed wyszukiwaniem
-- Naprawa błędnych kombinacji
+- Po tym jak użytkownik potwierdził lokalizację
+- Gdy chcesz zmienić lokalizację (nadpisze poprzednią)
 
-Zwraca:
-- valid: true/false
-- error: jeśli niepoprawne, z wyjaśnieniem
-- suggestion: poprawna kombinacja
+CO ROBI:
+- Waliduje że podana kombinacja istnieje w bazie (zwraca liczbę działek)
+- Zapisuje w pamięci sesji (kolejne narzędzia użyją automatycznie)
+- Oblicza centroid dla wyszukiwania przestrzennego
 
-PRZYKŁAD:
-validate_location_combination(miejscowosc="Gdańsk", dzielnica="Orłowo")
-→ {valid: false, error: "Orłowo należy do Gdyni, nie Gdańska",
-   suggestion: {miejscowosc: "Gdynia", dzielnica: "Orłowo"}}
+WAŻNE: Podawaj DOKŁADNE nazwy z bazy danych!
 """,
         "input_schema": {
             "type": "object",
             "properties": {
-                "miejscowosc": {
+                "wojewodztwo": {
                     "type": "string",
-                    "description": "Miejscowość do walidacji"
+                    "description": "Województwo (np. 'pomorskie')"
                 },
-                "dzielnica": {
+                "powiat": {
                     "type": "string",
-                    "description": "Dzielnica do walidacji"
+                    "description": "Powiat (np. 'gdański', 'Trójmiasto')"
                 },
                 "gmina": {
                     "type": "string",
-                    "description": "Gmina (opcjonalna, dla dodatkowej walidacji)"
+                    "description": "Gmina (np. 'Gdańsk', 'Żukowo')"
+                },
+                "miejscowosc": {
+                    "type": "string",
+                    "description": "Miejscowość (np. 'Gdańsk', 'Chwaszczyno')"
+                },
+                "dzielnica": {
+                    "type": "string",
+                    "description": "Dzielnica (np. 'Wrzeszcz', 'Osowa', 'Oliwa')"
                 }
             },
-            "required": ["dzielnica"]
+            "required": []
         }
     },
 
@@ -1037,7 +1055,7 @@ TYPY ENCJI:
 
 KIEDY UŻYWAĆ:
 - Gdy użytkownik używa niestandardowych nazw lub opisów
-- Gdy "Matemblewo" lub "VII Dwór" nie są rozpoznane przez resolve_location
+- Gdy "Matemblewo" lub "VII Dwór" nie są rozpoznane przez search_locations
 - Gdy chcesz zrozumieć intencję użytkownika (np. "spokojna" = kategoria ciszy)
 
 PRZYKŁADY:
@@ -1241,15 +1259,19 @@ Zachowuje istniejące preferencje i aktualizuje tylko wskazane pola.
 
 KIEDY UŻYWAĆ:
 - User mówi "chcę większe działki" lub "bliżej lasu"
-- Po obejrzeniu wyników user chce zmienić kryteria
+- Po obejrzeniu wyników user chce zmienić kryteria (NIE lokalizację!)
 - Iteracyjne doprecyzowywanie wyszukiwania
+
+ZMIANA LOKALIZACJI:
+Do zmiany lokalizacji użyj search_locations + confirm_location.
+NIE przekazuj kluczy lokalizacji (miejscowosc, dzielnica, gmina) przez to narzędzie.
 """,
         "input_schema": {
             "type": "object",
             "properties": {
                 "updates": {
                     "type": "object",
-                    "description": "Pola do aktualizacji (np. {\"min_area_m2\": 1000, \"quietness_categories\": [\"bardzo_cicha\"]})"
+                    "description": "Pola do aktualizacji (NIE lokalizacja). Przykłady: {\"min_area_m2\": 1000, \"quietness_categories\": [\"bardzo_cicha\"]}"
                 },
                 "reason": {
                     "type": "string",

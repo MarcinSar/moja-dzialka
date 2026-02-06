@@ -180,9 +180,15 @@ class GraphService:
             results = await neo4j.run(query, {"gmina": gmina_name})
             if results:
                 r = results[0]
+                # Get actual powiat from data
+                powiat_results = await neo4j.run(
+                    "MATCH (p:Parcel) WHERE p.gmina = $gmina RETURN DISTINCT p.powiat as powiat LIMIT 1",
+                    {"gmina": gmina_name}
+                )
+                powiat = powiat_results[0]["powiat"] if powiat_results else None
                 return GminaInfo(
                     name=r["name"],
-                    powiat="Trójmiasto",  # Fixed for this region
+                    powiat=powiat,
                     parcel_count=r.get("parcel_count", 0),
                     avg_area=r.get("avg_area"),
                     pct_with_mpzp=r.get("pct_with_mpzp"),
@@ -283,7 +289,7 @@ class GraphService:
                 p.pog_symbol IS NOT NULL as has_mpzp,
                 p.gmina as gmina,
                 p.dzielnica as miejscowosc,
-                'Trójmiasto' as powiat,
+                p.powiat as powiat,
                 p.pog_symbol as mpzp_symbol,
                 p.pog_nazwa as mpzp_nazwa,
                 p.is_residential_zone as mpzp_budowlany
@@ -431,7 +437,7 @@ class GraphService:
             results = await neo4j.run(query)
             if results:
                 return {
-                    "region": "Trójmiasto",
+                    "region": "pomorskie",
                     "cities": [
                         {"name": r["city"], "districts": r["districts"]}
                         for r in results
@@ -508,10 +514,17 @@ class GraphService:
 
         if criteria.miejscowosc:
             # miejscowosc is now 'dzielnica' in new schema
-            where_conditions.append("p.dzielnica = $dzielnica")
+            # Handle sub-districts: "Wrzeszcz" matches "Wrzeszcz Dolny", "Wrzeszcz Górny"
+            where_conditions.append(
+                "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dzielnica_prefix)"
+            )
             params["dzielnica"] = criteria.miejscowosc
+            params["dzielnica_prefix"] = criteria.miejscowosc + " "
 
-        # powiat is no longer stored - Trójmiasto is single area, skip this filter
+        # powiat filter — reads from Parcel.powiat property
+        if criteria.powiat:
+            conditions.append("p.powiat = $powiat")
+            params["powiat"] = criteria.powiat
 
         # Area filters (direct properties)
         if criteria.min_area_m2:
@@ -858,7 +871,7 @@ class GraphService:
         """
         try:
             if level == "region":
-                # Return all cities in Trójmiasto
+                # Return all cities
                 query = """
                     MATCH (c:City)
                     OPTIONAL MATCH (d:District)-[:BELONGS_TO]->(c)
@@ -944,8 +957,11 @@ class GraphService:
             conditions.append("p.gmina = $gmina")
             params["gmina"] = gmina
         if dzielnica:
-            conditions.append("p.dzielnica = $dzielnica")
+            conditions.append(
+                "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dzielnica_prefix)"
+            )
             params["dzielnica"] = dzielnica
+            params["dzielnica_prefix"] = dzielnica + " "
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -1030,7 +1046,7 @@ class GraphService:
                 // Location
                 p.gmina as gmina,
                 p.dzielnica as miejscowosc,
-                'Trójmiasto' as powiat,
+                p.powiat as powiat,
 
                 // Categories (properties on Parcel)
                 p.kategoria_ciszy as kategoria_ciszy,
@@ -1503,7 +1519,7 @@ class GraphService:
                 "gminy": miejscowosci,  # In MVP they're the same, later separate query
                 "total_parcels": total,
                 "by_miejscowosc": by_miejscowosc,
-                "hint": "Obecnie obsługujemy Trójmiasto (Gdańsk, Gdynia, Sopot). Podaj miejscowość lub dzielnicę."
+                "hint": "Podaj miejscowość lub dzielnicę aby zawęzić wyszukiwanie."
             }
         except Exception as e:
             logger.error(f"Get available locations error: {e}")
@@ -1514,7 +1530,7 @@ class GraphService:
         Get districts in a given MIEJSCOWOŚĆ (not gmina!).
 
         Dzielnica belongs to MIEJSCOWOŚĆ, not to gmina directly.
-        In MVP: gmina = miejscowość (Trójmiasto cities).
+        In MVP: gmina = miejscowość (cities are both gmina and miejscowość).
 
         Args:
             miejscowosc: Name of the miejscowość (e.g., "Gdańsk")
@@ -1554,6 +1570,8 @@ class GraphService:
 
     # Districts that exist in price data but NOT in cadastral (EGiB) data
     # Maps to nearest cadastral district or None (search whole city)
+    # TODO: Migrate to DB — vector search on LocationName nodes already covers these.
+    # Keep only as fallback until vector index is verified to handle all aliases.
     DISTRICT_ALIASES: Dict[str, Dict[str, Any]] = {
         # Matemblewo is a known area but parcels are categorized under Matarnia or "Gdańsk (inne)"
         "matemblewo": {"gmina": "Gdańsk", "search_in": ["Matarnia", "Osowa"], "note": "obszar przy TPK"},
@@ -1796,10 +1814,7 @@ class GraphService:
 
     async def _get_gmina_for_miejscowosc(self, miejscowosc: str) -> str:
         """
-        Get gmina for a given miejscowość.
-
-        In MVP: gmina = miejscowość (Trójmiasto cities).
-        In future: query database for gminy with multiple miejscowości (e.g., Żukowo).
+        Get gmina for a given miejscowość by querying actual data.
 
         Args:
             miejscowosc: Name of the miejscowość
@@ -1807,10 +1822,29 @@ class GraphService:
         Returns:
             Gmina name
         """
-        # In MVP, gmina = miejscowość for Trójmiasto
-        # TODO: When adding gminy wiejskie, query:
-        # MATCH (m:Miejscowosc {name: $miejscowosc})-[:PART_OF]->(g:Gmina)
-        # RETURN g.name
+        # Query actual relationship from Parcel data
+        query = """
+            MATCH (p:Parcel)
+            WHERE p.miejscowosc = $miejscowosc
+            RETURN DISTINCT p.gmina as gmina LIMIT 1
+        """
+        try:
+            results = await neo4j.run(query, {"miejscowosc": miejscowosc})
+            if results:
+                return results[0]["gmina"]
+
+            # Fallback: check District→City relationship
+            query2 = """
+                MATCH (d:District {name: $name})-[:BELONGS_TO]->(c:City)
+                RETURN c.name as gmina
+            """
+            results2 = await neo4j.run(query2, {"name": miejscowosc})
+            if results2:
+                return results2[0]["gmina"]
+        except Exception as e:
+            logger.warning(f"_get_gmina_for_miejscowosc failed for '{miejscowosc}': {e}")
+
+        # Last resort: return as-is (may be a city that is also a gmina)
         return miejscowosc
 
     # =========================================================================
@@ -2439,8 +2473,11 @@ class GraphService:
             params["gmina"] = criteria.gmina
 
         if criteria.miejscowosc:
-            where_conditions.append("p.dzielnica = $dzielnica")
+            where_conditions.append(
+                "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dzielnica_prefix)"
+            )
             params["dzielnica"] = criteria.miejscowosc
+            params["dzielnica_prefix"] = criteria.miejscowosc + " "
 
         # Area filters
         if criteria.min_area_m2:
@@ -2719,6 +2756,7 @@ class GraphService:
         build_status: Optional[str] = None,
         size_category: Optional[List[str]] = None,
         gmina: Optional[str] = None,
+        dzielnica: Optional[str] = None,
         limit: int = 20
     ) -> List[Dict[str, Any]]:
         """
@@ -2734,6 +2772,7 @@ class GraphService:
             build_status: Filter by build status (zabudowana, niezabudowana)
             size_category: Filter by size categories
             gmina: Filter by city
+            dzielnica: Filter by district
             limit: Maximum results
 
         Returns:
@@ -2766,6 +2805,13 @@ class GraphService:
         if gmina:
             where_conditions.append("candidate.gmina = $gmina")
             params["gmina"] = gmina
+
+        if dzielnica:
+            where_conditions.append(
+                "(candidate.dzielnica = $dzielnica OR candidate.dzielnica STARTS WITH $dzielnica_prefix)"
+            )
+            params["dzielnica"] = dzielnica
+            params["dzielnica_prefix"] = dzielnica + " "
 
         graph_match_clause = "\n".join(graph_matches) if graph_matches else ""
         where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
@@ -2811,6 +2857,53 @@ class GraphService:
         except Exception as e:
             logger.error(f"GraphRAG search error: {e}")
             return []
+
+    async def get_location_centroid(
+        self,
+        dzielnica: Optional[str] = None,
+        gmina: Optional[str] = None,
+    ) -> Optional[Dict[str, float]]:
+        """Compute centroid (lat, lon) for a district or city by averaging parcel centroids.
+
+        Used to auto-infer spatial search coordinates when user specifies a location
+        by name but not by coordinates.
+
+        Args:
+            dzielnica: District name (e.g., "Osowa")
+            gmina: City name (e.g., "Gdańsk")
+
+        Returns:
+            Dict with 'lat' and 'lon' keys, or None if no parcels found
+        """
+        conditions = []
+        params = {}
+        if dzielnica:
+            conditions.append(
+                "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dzielnica_prefix)"
+            )
+            params["dzielnica"] = dzielnica
+            params["dzielnica_prefix"] = dzielnica + " "
+        elif gmina:
+            conditions.append("p.gmina = $gmina")
+            params["gmina"] = gmina
+        else:
+            return None
+
+        query = f"""
+            MATCH (p:Parcel)
+            WHERE {" AND ".join(conditions)}
+                AND p.centroid_lat IS NOT NULL
+                AND p.centroid_lon IS NOT NULL
+            RETURN avg(p.centroid_lat) AS lat, avg(p.centroid_lon) AS lon
+        """
+        try:
+            results = await neo4j.run(query, params)
+            if results and results[0]["lat"] is not None:
+                return {"lat": results[0]["lat"], "lon": results[0]["lon"]}
+            return None
+        except Exception as e:
+            logger.error(f"Get location centroid error: {e}")
+            return None
 
 
 # Global instance

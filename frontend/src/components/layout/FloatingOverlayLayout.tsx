@@ -14,7 +14,7 @@
  *           - ChatHud (left side, floating bubbles)
  *           - DetailsHud (L/R panels when viewing parcel details)
  *           - InputBar (bottom center)
- *  z-[10] Avatar (repositions based on state)
+ *  z-[10] Avatar (repositions based on state, always visible, drifts organically)
  *  z-[30] PropertyCardsStrip + results badge
  *  z-[50] Logo + navigation
  */
@@ -24,6 +24,7 @@ import { useChatStore } from '@/stores/chatStore';
 import { useParcelRevealStore } from '@/stores/parcelRevealStore';
 import { useDetailsPanelStore } from '@/stores/detailsPanelStore';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useFloatingDrift } from '@/hooks/useFloatingDrift';
 import { MapPanelImmersive } from '../results/MapPanelImmersive';
 import { ParticleBackground } from '../effects/ParticleBackground';
 import { Avatar } from '../avatar/Avatar';
@@ -39,6 +40,7 @@ export function FloatingOverlayLayout() {
   const isDetailsOpen = useDetailsPanelStore((s) => s.isOpen);
 
   const isMobile = useIsMobile();
+  const driftRef = useFloatingDrift(22);
 
   const hasMessages = messages.length > 0;
   const hasResults = parcels.length > 0;
@@ -89,7 +91,7 @@ export function FloatingOverlayLayout() {
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
           </svg>
         </div>
-        <span className="text-white font-medium text-sm hidden md:inline">moja-działka</span>
+        <span className="text-white font-medium text-sm hidden md:inline">moja-dzialka</span>
       </motion.div>
 
       {/* Back button (when results visible) */}
@@ -119,52 +121,62 @@ export function FloatingOverlayLayout() {
         )}
       </AnimatePresence>
 
-      {/* Avatar - always visible, repositions smoothly, no box */}
-      <AnimatePresence>
-        {!isDetailsOpen && (
-          <motion.div
-            className="absolute z-[10] pointer-events-none"
-            animate={
-              showIntro
-                ? {
-                    top: '50%',
-                    left: '50%',
-                    x: '-50%',
-                    y: '-55%',
-                    scale: isMobile ? 0.75 : 1,
-                  }
-                : isMobile
-                ? {
-                    top: '12px',
-                    left: '50%',
-                    x: '-50%',
-                    y: '0%',
-                    scale: 0.45,
-                  }
-                : hasResults
-                ? {
-                    top: 'auto',
-                    bottom: '200px',
-                    left: '60px',
-                    x: '0%',
-                    y: '0%',
-                    scale: 0.35,
-                  }
-                : {
-                    top: '50%',
-                    left: '36%',
-                    x: '-50%',
-                    y: '-50%',
-                    scale: 0.55,
-                  }
-            }
-            exit={{ opacity: 0, scale: 0.3 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 120, mass: 1 }}
-          >
-            <Avatar variant="full" />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Avatar - ALWAYS visible, repositions smoothly, drifts organically */}
+      <motion.div
+        className="absolute z-[10] pointer-events-none"
+        animate={
+          showIntro
+            ? {
+                top: '50%',
+                left: '50%',
+                x: '-50%',
+                y: '-55%',
+                scale: isMobile ? 0.75 : 1,
+                opacity: 1,
+              }
+            : isMobile
+            ? {
+                top: '12px',
+                left: '50%',
+                x: '-50%',
+                y: '0%',
+                scale: 0.5,
+                opacity: 1,
+              }
+            : isDetailsOpen
+            ? {
+                top: '80px',
+                left: '40px',
+                x: '0%',
+                y: '0%',
+                scale: 0.5,
+                opacity: 1,
+              }
+            : hasResults
+            ? {
+                top: '30%',
+                left: '60px',
+                x: '0%',
+                y: '0%',
+                scale: 0.6,
+                opacity: 1,
+              }
+            : {
+                top: '50%',
+                left: '60px',
+                x: '0%',
+                y: '-50%',
+                scale: 0.7,
+                opacity: 1,
+              }
+        }
+        transition={{ type: 'spring', damping: 28, stiffness: 120, mass: 1 }}
+      >
+        {/* Inner drift wrapper — continuous organic float via rAF */}
+        <div ref={driftRef}>
+          <Avatar variant="full" />
+        </div>
+      </motion.div>
 
       {/* Intro text - only before first message */}
       <AnimatePresence>
@@ -179,25 +191,25 @@ export function FloatingOverlayLayout() {
           >
             <div className="text-center space-y-2 px-4">
               <h1 className="text-xl md:text-2xl font-semibold text-white">
-                Znajdź swoją wymarzoną działkę
+                Znajdz swoja wymarzona dzialke
               </h1>
               <p className="text-slate-400 max-w-[90vw] md:max-w-md mx-auto text-sm md:text-base">
-                Powiedz mi, czego szukasz - lokalizacja, cisza, natura, dostępność.
-                Przeszukam tysiące działek i znajdę idealne dla Ciebie.
+                Powiedz mi, czego szukasz - lokalizacja, cisza, natura, dostepnosc.
+                Przeszukam tysiace dzialek i znajde idealne dla Ciebie.
               </p>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Property Cards Strip - when results visible and not in details view */}
+      {/* Property Cards Strip - left-aligned to avoid overlapping chat on the right */}
       <AnimatePresence>
         {hasResults && !isDetailsOpen && (
           <motion.div
             className={`absolute z-30 pointer-events-auto ${
               isMobile
                 ? 'bottom-16 left-0 right-0 px-2'
-                : 'bottom-20 left-1/2 -translate-x-1/2 w-full max-w-5xl px-4'
+                : 'bottom-20 left-4 w-full max-w-3xl px-4'
             }`}
             initial={{ y: 60, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
@@ -209,14 +221,14 @@ export function FloatingOverlayLayout() {
         )}
       </AnimatePresence>
 
-      {/* Results count badge */}
+      {/* Results count badge - left-aligned with cards */}
       <AnimatePresence>
         {hasResults && !isDetailsOpen && (
           <motion.div
             className={`absolute z-30 ${
               isMobile
                 ? 'bottom-[180px] left-1/2 -translate-x-1/2'
-                : 'bottom-[230px] left-1/2 -translate-x-1/2'
+                : 'bottom-[230px] left-4 ml-4'
             }`}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -226,7 +238,7 @@ export function FloatingOverlayLayout() {
               <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
               <span className="text-sm text-slate-300">
                 Znaleziono{' '}
-                <span className="text-amber-400 font-medium">{parcels.length}</span> działek
+                <span className="text-amber-400 font-medium">{parcels.length}</span> dzialek
               </span>
             </div>
           </motion.div>

@@ -21,8 +21,8 @@ gates:
 
 tools:
   always_available:
-    - resolve_location
-    - get_available_locations
+    - search_locations
+    - confirm_location
   context_available:
     - propose_search_preferences
   restricted: []
