@@ -507,12 +507,18 @@ class ToolExecutorV4:
         # Return first page inline
         first_page = result_dicts[:10]
 
+        remaining = len(result_dicts) - len(first_page)
+        pages_total = (len(result_dicts) + 9) // 10
+
         return {
             "status": "success",
             "count": len(result_dicts),
             "parcels": first_page,
-            "has_more": len(result_dicts) > 10,
-            "message": f"Znaleziono {len(result_dicts)} działek. Pokazuję {len(first_page)} najlepszych.",
+            "has_more": remaining > 0,
+            "remaining": remaining,
+            "pages_total": pages_total,
+            "message": f"Znaleziono {len(result_dicts)} działek. Pokazuję top {len(first_page)}.",
+            "hint": f"Kolejne wyniki: results_load_page(page=1..{pages_total - 1}). NIE powtarzaj search_execute z tymi samymi filtrami." if remaining > 0 else None,
         }, {"search_results": search_results}
 
     async def _search_refine(self, params: Dict[str, Any]) -> ToolResult:

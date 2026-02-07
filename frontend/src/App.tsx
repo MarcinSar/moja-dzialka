@@ -6,6 +6,7 @@ import { useSearchStore } from '@/stores/searchStore';
 import { useUIPhaseStore } from '@/stores/uiPhaseStore';
 import { useParcelRevealStore, generateHighlights, generateExplanation } from '@/stores/parcelRevealStore';
 import { usePotreeStore } from '@/stores/potreeStore';
+import { useMapLayerStore } from '@/stores/mapLayerStore';
 import { wsService, parseWSEvent } from '@/services/websocket';
 import { listGminy, getSearchStats } from '@/services/api';
 import type { SearchResultItem } from '@/types';
@@ -199,6 +200,7 @@ function App() {
 
                 const revealStore = useParcelRevealStore.getState();
                 revealStore.setParcels(parcelsWithExplanations);
+                useMapLayerStore.getState().setBaseLayer('satellite');
                 setAvatarMood('excited');
 
                 setTimeout(() => {

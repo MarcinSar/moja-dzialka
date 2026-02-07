@@ -96,6 +96,15 @@ Konwencje narzędzi:
 7. notepad_update — aktualizuj swoje pola (user_goal, preferences, next_step, notes)
 8. Odniesienia do działek: "1", "pierwsza", "ta druga" → interpretuj z kontekstu wyników
 
+KRYTYCZNE — paginacja wyników:
+- search_execute zwraca 30-50 wyników, ale inline pokazuje tylko 10 pierwszych.
+- Gdy user chce INNE/KOLEJNE działki (np. "pokaż inne", "nie podoba mi się", "następne"):
+  → UŻYJ results_load_page(page=1), results_load_page(page=2) itd.
+  → NIE wywołuj ponownie search_execute z tymi samymi parametrami!
+  → search_execute powtórzone z tymi samymi filtrami da IDENTYCZNE wyniki.
+- search_execute wywołuj TYLKO gdy user ZMIENIA kryteria (inna dzielnica, inny rozmiar, itp.)
+- Gdy pokazujesz działki z market_map, wybieraj z KOLEJNYCH stron, nie z tych samych top 10.
+
 Limity:
 - search_execute: max 50 wyników na zapytanie
 - results_load_page: 10 wyników per strona
