@@ -127,10 +127,11 @@ export type WSEventType =
   | 'thinking'
   | 'done'
   | 'session'
-  | 'skill_selected'  // v2: which skill is executing
-  | 'cleared'         // v2: state cleared
-  | 'state'           // v2: state response
-  | 'pong'            // v2: ping response
+  | 'notepad'          // v4: notepad state
+  | 'skill_selected'   // v2: which skill is executing
+  | 'cleared'          // v2: state cleared
+  | 'state'            // v2: state response
+  | 'pong'
   // LiDAR events
   | 'lidar_started'
   | 'lidar_progress'

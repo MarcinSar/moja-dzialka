@@ -4,9 +4,9 @@ type EventCallback = (event: WSEvent) => void;
 type ConnectionCallback = (connected: boolean) => void;
 
 // Use WSS for HTTPS, WS for HTTP; connect through nginx proxy
-// Using API v2 with 7-layer memory model
+// Using API v4 with single-agent notepad-driven flow
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-const WS_URL = `${protocol}//${window.location.host}/api/v2/conversation/ws`;
+const WS_URL = `${protocol}//${window.location.host}/api/v4/conversation/ws`;
 
 // Persistence keys for localStorage
 const USER_ID_KEY = 'moja-dzialka-user-id';
@@ -75,9 +75,9 @@ class WebSocketService {
             return;
           }
 
-          // Store session_id when we receive session event
+          // Store session_id when we receive session event (v4: has notepad, v2: had state)
           if (data.type === 'session' && data.data) {
-            const sessionData = data.data as { session_id?: string };
+            const sessionData = data.data as { session_id?: string; notepad?: unknown };
             if (sessionData.session_id) {
               storeSessionId(sessionData.session_id);
               console.log('[WS] Stored session ID:', sessionData.session_id);

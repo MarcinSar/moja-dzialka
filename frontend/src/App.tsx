@@ -63,30 +63,32 @@ function App() {
 
       switch (parsed.type) {
         case 'message':
-          if (parsed.message) {
-            const { currentStreamingId } = useChatStore.getState();
+          {
+            // v4 format: {text: '...', delta: true/false}
+            const msgData = event.data as { text?: string; content?: string; delta?: boolean; is_complete?: boolean };
+            const text = msgData.text ?? msgData.content ?? '';
+            const isDelta = msgData.delta ?? !msgData.is_complete;
 
-            if (!parsed.message.is_complete) {
-              // Streaming delta - content is just the new chunk
-              const delta = parsed.message.content;
+            if (text) {
+              const { currentStreamingId } = useChatStore.getState();
 
-              if (!currentStreamingId) {
-                // Start new streaming message with this delta
-                const msgId = `msg-${Date.now()}`;
-                startStreaming(msgId, delta);
+              if (isDelta) {
+                if (!currentStreamingId) {
+                  const msgId = `msg-${Date.now()}`;
+                  startStreaming(msgId, text);
+                } else {
+                  appendToLastMessage(text);
+                }
+                setAvatarMood('speaking');
               } else {
-                // Append delta to existing streaming message
-                if (delta) {
-                  appendToLastMessage(delta);
+                // Non-streaming: full message at once
+                if (!currentStreamingId) {
+                  const msgId = `msg-${Date.now()}`;
+                  startStreaming(msgId, text);
+                } else {
+                  appendToLastMessage(text);
                 }
               }
-              setAvatarMood('speaking');
-            } else {
-              // Message complete
-              if (currentStreamingId) {
-                finishStreaming();
-              }
-              setAvatarMood('idle');
             }
           }
           break;
@@ -104,20 +106,22 @@ function App() {
           break;
 
         case 'tool_call':
-          if (parsed.toolCall) {
+          {
+            // v4 format: {name, input, id} — v2 format: {tool, params, status}
+            const tcData = event.data as { name?: string; tool?: string; input?: unknown; params?: unknown; id?: string; agent_type?: string };
+            const toolName = tcData.name || tcData.tool || 'unknown';
+            const toolParams = tcData.input || tcData.params;
             addActivity({
               id: `tool-${Date.now()}`,
               type: 'action',
-              message: `${parsed.toolCall.tool}`,
-              details: JSON.stringify(parsed.toolCall.params),
+              message: toolName,
+              details: toolParams ? JSON.stringify(toolParams) : undefined,
               timestamp: new Date(),
             });
-            // Avatar thinks while tools execute
             setAvatarMood('thinking');
-            // Update agent type if provided (v3.0)
-            if (parsed.toolCall.agent_type) {
+            if (tcData.agent_type) {
               setActiveAgent(
-                parsed.toolCall.agent_type as import('@/stores/uiPhaseStore').AgentType,
+                tcData.agent_type as import('@/stores/uiPhaseStore').AgentType,
                 undefined
               );
             }
@@ -125,21 +129,25 @@ function App() {
           break;
 
         case 'tool_result':
-          if (parsed.toolResult) {
+          {
+            // v4 format: {name, result, duration_ms} — v2 format: {tool, result_preview, result, duration_ms}
+            const trData = event.data as { name?: string; tool?: string; result?: Record<string, unknown>; result_preview?: string; duration_ms?: number };
+            const trToolName = trData.name || trData.tool || 'unknown';
             addActivity({
               id: `result-${Date.now()}`,
               type: 'success',
-              message: `${parsed.toolResult.tool}: zakończone`,
-              details: parsed.toolResult.result_preview,
+              message: `${trToolName}: zakończone`,
+              details: trData.result_preview,
               timestamp: new Date(),
-              duration_ms: parsed.toolResult.duration_ms,
+              duration_ms: trData.duration_ms,
             });
 
-            // Handle execute_search results - transition to immersive search results view
-            if (parsed.toolResult.tool === 'execute_search') {
-              const result = parsed.toolResult.result as {
+            // Handle search results - v4: search_execute, v2: execute_search
+            if (trToolName === 'search_execute' || trToolName === 'execute_search') {
+              const result = trData.result as {
                 parcels?: Array<{
-                  id: string;
+                  id?: string;
+                  id_dzialki?: string;
                   gmina?: string;
                   miejscowosc?: string;
                   area_m2?: number;
@@ -150,20 +158,23 @@ function App() {
                   mpzp_symbol?: string;
                   centroid_lat?: number;
                   centroid_lon?: number;
-                  // Backend-generated highlights and explanation
                   highlights?: string[];
                   explanation?: string;
                 }>;
+                items?: Array<Record<string, unknown>>;
                 count?: number;
+                total?: number;
               };
 
-              if (result?.parcels && result.parcels.length > 0) {
-                console.log('[SearchResults] Received', result.parcels.length, 'parcels - transitioning to immersive view');
+              // v4 returns {items, total, ...} from JSONL pagination
+              const parcels = result?.parcels || (result?.items as typeof result.parcels);
 
-                // Transform parcels to SearchResultItem format
-                const parcelsWithExplanations = result.parcels.map((p) => {
+              if (parcels && parcels.length > 0) {
+                console.log('[SearchResults] Received', parcels.length, 'parcels - transitioning to immersive view');
+
+                const parcelsWithExplanations = parcels.map((p) => {
                   const parcel: SearchResultItem = {
-                    parcel_id: p.id,
+                    parcel_id: p.id || p.id_dzialki || '',
                     rrf_score: 0,
                     sources: [],
                     gmina: p.gmina || null,
@@ -179,7 +190,6 @@ function App() {
                     distance_m: null,
                   };
 
-                  // Use backend-generated highlights/explanation if available, otherwise generate locally
                   return {
                     parcel,
                     explanation: p.explanation || generateExplanation(parcel),
@@ -187,15 +197,10 @@ function App() {
                   };
                 });
 
-                // Update the reveal store with parcels data
                 const revealStore = useParcelRevealStore.getState();
                 revealStore.setParcels(parcelsWithExplanations);
-
-                // Set avatar mood
                 setAvatarMood('excited');
 
-                // Auto-transition to immersive search results view after a short delay
-                // This creates a "wow" reveal effect
                 setTimeout(() => {
                   const { transitionToSearchResults } = useUIPhaseStore.getState();
                   transitionToSearchResults();
@@ -203,14 +208,12 @@ function App() {
               }
             }
 
-            // Handle map data from generate_map_data tool
-            if (parsed.toolResult.tool === 'generate_map_data') {
-              const result = parsed.toolResult.result as { geojson?: unknown; center?: unknown; parcel_count?: number };
+            // Handle map data - v4: market_map, v2: generate_map_data
+            if (trToolName === 'market_map' || trToolName === 'generate_map_data') {
+              const result = trData.result as { geojson?: unknown; center?: unknown; parcel_count?: number };
               if (result?.geojson) {
                 console.log('[Map] Received map data with', result.parcel_count, 'parcels');
                 setMapData(result as import('@/types').MapData);
-                // Avatar gets excited when results come in
-                // (this is also triggered in searchStore but we set it here for immediacy)
                 setAvatarMood('excited');
               }
             }
@@ -259,10 +262,10 @@ function App() {
           break;
 
         case 'done':
-          // v2: Processing complete
+          // v4: {session_id}, v2: {phase, engagement}
           {
-            const data = event.data as { phase?: string; engagement?: string };
-            console.log('[WS] Done, phase:', data.phase, 'engagement:', data.engagement);
+            const data = event.data as { session_id?: string; phase?: string; engagement?: string };
+            console.log('[WS] Done, session:', data.session_id);
             // Finish any streaming message
             const { currentStreamingId } = useChatStore.getState();
             if (currentStreamingId) {
@@ -273,14 +276,22 @@ function App() {
           break;
 
         case 'error':
-          addActivity({
-            id: `error-${Date.now()}`,
-            type: 'error',
-            message: String(event.data),
-            timestamp: new Date(),
-          });
-          // Return to idle on error
-          setAvatarMood('idle');
+          {
+            const errData = event.data as { message?: string } | string;
+            const errMsg = typeof errData === 'string' ? errData : errData?.message || 'Unknown error';
+            addActivity({
+              id: `error-${Date.now()}`,
+              type: 'error',
+              message: errMsg,
+              timestamp: new Date(),
+            });
+            // Finish streaming on error and return to idle
+            const { currentStreamingId: errStreamId } = useChatStore.getState();
+            if (errStreamId) {
+              finishStreaming();
+            }
+            setAvatarMood('idle');
+          }
           break;
 
         // LiDAR events - fields are directly on the event, not in event.data
