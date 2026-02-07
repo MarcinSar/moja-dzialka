@@ -293,6 +293,19 @@ class Agent:
             iteration += 1
 
             # Streaming API call
+            logger.debug(f"API call iteration {iteration}, messages count: {len(api_messages)}")
+            for i, m in enumerate(api_messages):
+                role = m.get("role", "?")
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    types = [b.get("type", "?") for b in content]
+                    logger.debug(f"  messages[{i}]: role={role}, blocks={types}")
+                else:
+                    logger.debug(f"  messages[{i}]: role={role}, len={len(str(content))}")
+
+            turn_text = ""
+            tool_uses = []
+
             try:
                 stream = self.client.messages.stream(
                     model=self.model,
@@ -301,14 +314,6 @@ class Agent:
                     tools=self.tools,
                     messages=api_messages,
                 )
-            except Exception as e:
-                yield {"type": "error", "data": {"message": str(e)}}
-                return
-
-            turn_text = ""
-            tool_uses = []
-
-            try:
                 async with stream as s:
                     async for event in s:
                         if event.type == "content_block_start":
@@ -340,9 +345,14 @@ class Agent:
 
                     # Get the final message
                     response = await s.get_final_message()
+
             except RETRYABLE_ERRORS as e:
-                logger.warning(f"Streaming error: {e}")
+                logger.warning(f"Streaming error (retryable): {e}")
                 yield {"type": "error", "data": {"message": str(e)}}
+                return
+            except anthropic.APIError as e:
+                logger.error(f"API error on iteration {iteration}: {e}")
+                yield {"type": "error", "data": {"message": f"API error: {e}"}}
                 return
 
             collected_text += turn_text
