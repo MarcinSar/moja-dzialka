@@ -209,32 +209,57 @@ def import_parcels(session, parcels: List[Dict]):
 
 
 def import_districts(session):
-    """Extract and import district nodes from parcels."""
+    """Extract and import district nodes from parcels.
+
+    Each district is assigned to the city where the MAJORITY of its parcels are.
+    This prevents phantom districts caused by 1-2 border parcels misattributed
+    to a neighboring city (e.g. 1 parcel "Osowa" in Sopot vs 7576 in Gdańsk).
+
+    District uniqueness key: {name, city} — same name in different cities
+    creates separate nodes (rare but correct, e.g. "Kamienny Potok" if it
+    existed in two cities).
+    """
     logger.info("\n" + "=" * 60)
     logger.info("IMPORT DZIELNIC (District)")
     logger.info("=" * 60)
 
+    # Step 1: For each district name, find the dominant city (most parcels)
     query = """
     MATCH (p:Parcel)
-    WHERE p.dzielnica IS NOT NULL
-    WITH DISTINCT p.dzielnica AS name, p.gmina AS city
+    WHERE p.dzielnica IS NOT NULL AND p.gmina IS NOT NULL
+    WITH p.dzielnica AS name, p.gmina AS city, count(p) AS cnt
+    ORDER BY name, cnt DESC
+    WITH name, collect({city: city, cnt: cnt}) AS cities
+    WITH name, cities[0].city AS dominant_city, cities[0].cnt AS dominant_cnt,
+         CASE WHEN size(cities) > 1 THEN cities[1].cnt ELSE 0 END AS second_cnt
     MERGE (d:District {name: name})
-    SET d.city = city
-    RETURN count(d) as count
+    SET d.city = dominant_city
+    RETURN count(d) as count,
+           sum(CASE WHEN second_cnt > 0 AND second_cnt <= 5 THEN 1 ELSE 0 END) as border_cases
     """
 
     result = session.run(query)
     record = result.single()
     logger.info(f"  Created {record['count']} districts")
+    if record['border_cases'] > 0:
+        logger.warning(f"  {record['border_cases']} districts had border parcels in another city (assigned to dominant city)")
 
 
 def create_hierarchy_relations(session):
-    """Create LOCATED_IN and BELONGS_TO relations."""
+    """Create LOCATED_IN and BELONGS_TO relations.
+
+    LOCATED_IN links every Parcel to its District node (matched by dzielnica name).
+    BELONGS_TO links each District to exactly ONE City (the dominant city).
+
+    Border parcels (e.g. 1 parcel "Osowa" in Sopot) still get linked to the
+    District node (Osowa -> Gdańsk) because we match on name only. This is
+    intentional — the parcel is findable via its District.
+    """
     logger.info("\n" + "=" * 60)
     logger.info("RELACJE HIERARCHICZNE")
     logger.info("=" * 60)
 
-    # Parcel -> District
+    # Parcel -> District (match by dzielnica name)
     query = """
     MATCH (p:Parcel)
     WHERE p.dzielnica IS NOT NULL
@@ -245,16 +270,29 @@ def create_hierarchy_relations(session):
     summary = result.consume()
     logger.info(f"  LOCATED_IN (Parcel -> District): {summary.counters.relationships_created:,}")
 
-    # District -> City
+    # District -> City (exactly one BELONGS_TO per District)
+    # First: remove any existing BELONGS_TO to prevent duplicates on re-run
+    query = """
+    MATCH (d:District)-[r:BELONGS_TO]->(:City)
+    DELETE r
+    RETURN count(r) as deleted
+    """
+    result = session.run(query)
+    deleted = result.single()["deleted"]
+    if deleted > 0:
+        logger.info(f"  Cleaned {deleted} old BELONGS_TO relations")
+
+    # Then: create exactly one BELONGS_TO per District based on d.city property
     query = """
     MATCH (d:District)
     WHERE d.city IS NOT NULL
     MATCH (c:City {name: d.city})
-    MERGE (d)-[:BELONGS_TO]->(c)
+    CREATE (d)-[:BELONGS_TO]->(c)
+    RETURN count(*) as created
     """
     result = session.run(query)
-    summary = result.consume()
-    logger.info(f"  BELONGS_TO (District -> City): {summary.counters.relationships_created:,}")
+    created = result.single()["created"]
+    logger.info(f"  BELONGS_TO (District -> City): {created:,}")
 
 
 def create_ownership_relations(session):

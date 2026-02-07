@@ -81,6 +81,9 @@ class SearchPreferences:
     # === NEO4J V2: POG RESIDENTIAL (2026-01-25) ===
     pog_residential: Optional[bool] = None  # Only residential POG zones
 
+    # === SHAPE QUALITY (2026-02-07) ===
+    include_infrastructure: bool = False  # Include SK/SI POG zones (default: exclude)
+
     # === SORTING ===
     sort_by: str = "quietness_score"  # or "nature_score", "accessibility_score", "area_m2"
     sort_desc: bool = True
@@ -91,10 +94,15 @@ class SearchPreferences:
     # === SEMANTIC SEARCH (GraphRAG via Neo4j text embeddings) ===
     query_text: Optional[str] = None  # Natural language description for embedding search
 
-    # === LEGACY WEIGHTS (for backwards compatibility) ===
-    quietness_weight: float = 0.5
-    nature_weight: float = 0.3
-    accessibility_weight: float = 0.2
+    # === DIMENSION WEIGHTS (agent sets from user emphasis) ===
+    w_quietness: float = 0.0
+    w_nature: float = 0.0
+    w_forest: float = 0.0
+    w_water: float = 0.0
+    w_school: float = 0.0
+    w_shop: float = 0.0
+    w_transport: float = 0.0
+    w_accessibility: float = 0.0
 
     def to_graph_criteria(self, limit: int = 50) -> ParcelSearchCriteria:
         """Convert to ParcelSearchCriteria for graph search."""
@@ -127,8 +135,19 @@ class SearchPreferences:
             build_status=self.build_status,
             size_category=self.size_category,
             pog_residential=self.pog_residential,
+            # Shape quality (2026-02-07)
+            include_infrastructure=self.include_infrastructure,
             sort_by=self.sort_by,
             sort_desc=self.sort_desc,
+            # Dimension weights
+            w_quietness=self.w_quietness,
+            w_nature=self.w_nature,
+            w_forest=self.w_forest,
+            w_water=self.w_water,
+            w_school=self.w_school,
+            w_shop=self.w_shop,
+            w_transport=self.w_transport,
+            w_accessibility=self.w_accessibility,
             limit=limit,
         )
 
@@ -176,6 +195,10 @@ class SearchResult:
     # Access
     has_road_access: Optional[bool] = None
 
+    # Shape quality
+    shape_index: Optional[float] = None
+    aspect_ratio: Optional[float] = None
+
     # Vector similarity (if applicable)
     similarity_score: Optional[float] = None
 
@@ -200,6 +223,9 @@ class HybridSearchService:
     SPATIAL_WEIGHT = 0.20  # PostGIS distance-ordered by centroid proximity
     SEMANTIC_WEIGHT = 0.35 # GraphRAG text embedding similarity
 
+    # Minimum acceptable results before triggering relaxation
+    MIN_RESULTS = 5
+
     async def search(
         self,
         preferences: SearchPreferences,
@@ -207,10 +233,13 @@ class HybridSearchService:
         include_details: bool = False,
     ) -> List[SearchResult]:
         """
-        Perform hybrid search based on user preferences.
+        Perform hybrid search with progressive relaxation.
 
-        Graph search is ALWAYS executed as the primary source.
-        Spatial/vector are used to augment when relevant.
+        Strategy:
+        1. Full criteria (graph + spatial + semantic)
+        2. If <5 results: relax distance thresholds 2x
+        3. If still <5: drop soft criteria, keep hard filters
+        4. If still 0: pure semantic search (vector only)
 
         Args:
             preferences: Search preferences
@@ -226,10 +255,97 @@ class HybridSearchService:
                    f"nature={preferences.nature_categories}, "
                    f"reference={preferences.reference_parcel_id}")
 
-        # Collect results from each source in parallel
+        # Strategy 1: Full criteria
+        combined = await self._execute_search_pipeline(preferences, limit)
+
+        if len(combined) >= self.MIN_RESULTS:
+            if include_details and combined:
+                combined = await self._enrich_results(combined[:limit])
+            return combined[:limit]
+
+        # Strategy 2: Relax distance thresholds 2x
+        logger.info(f"Only {len(combined)} results, relaxing distance thresholds 2x")
+        relaxed = self._relax_distances(preferences)
+        combined_relaxed = await self._execute_search_pipeline(relaxed, limit)
+
+        if len(combined_relaxed) >= self.MIN_RESULTS:
+            if include_details and combined_relaxed:
+                combined_relaxed = await self._enrich_results(combined_relaxed[:limit])
+            return combined_relaxed[:limit]
+
+        # Strategy 3: Drop soft criteria, keep hard filters only
+        logger.info(f"Only {len(combined_relaxed)} results, dropping soft criteria")
+        minimal = self._drop_soft_criteria(preferences)
+        combined_minimal = await self._execute_search_pipeline(minimal, limit)
+
+        if combined_minimal:
+            if include_details:
+                combined_minimal = await self._enrich_results(combined_minimal[:limit])
+            return combined_minimal[:limit]
+
+        # Strategy 4: Pure semantic fallback
+        logger.info("No graph results, falling back to pure semantic search")
+        semantic_results = await self._graphrag_search(preferences, limit * 2)
+        if semantic_results:
+            combined_semantic = self._convert_semantic_to_results(semantic_results)
+            if include_details:
+                combined_semantic = await self._enrich_results(combined_semantic[:limit])
+            return combined_semantic[:limit]
+
+        return []
+
+    @staticmethod
+    def _relax_distances(prefs: SearchPreferences) -> SearchPreferences:
+        """Create a copy with distance thresholds doubled."""
+        import copy
+        relaxed = copy.copy(prefs)
+        if relaxed.max_dist_to_forest_m:
+            relaxed.max_dist_to_forest_m = int(relaxed.max_dist_to_forest_m * 2)
+        if relaxed.max_dist_to_water_m:
+            relaxed.max_dist_to_water_m = int(relaxed.max_dist_to_water_m * 2)
+        if relaxed.max_dist_to_school_m:
+            relaxed.max_dist_to_school_m = int(relaxed.max_dist_to_school_m * 2)
+        if relaxed.max_dist_to_shop_m:
+            relaxed.max_dist_to_shop_m = int(relaxed.max_dist_to_shop_m * 2)
+        if relaxed.max_dist_to_bus_stop_m:
+            relaxed.max_dist_to_bus_stop_m = int(relaxed.max_dist_to_bus_stop_m * 2)
+        if relaxed.max_dist_to_hospital_m:
+            relaxed.max_dist_to_hospital_m = int(relaxed.max_dist_to_hospital_m * 2)
+        # Also relax all weights slightly (move toward center)
+        for attr in ["w_quietness", "w_nature", "w_forest", "w_water",
+                      "w_school", "w_shop", "w_transport", "w_accessibility"]:
+            val = getattr(relaxed, attr, 0.0)
+            if val > 0:
+                setattr(relaxed, attr, val * 0.7)
+        return relaxed
+
+    @staticmethod
+    def _drop_soft_criteria(prefs: SearchPreferences) -> SearchPreferences:
+        """Create a copy with only hard filters (location, area, ownership, build_status)."""
+        return SearchPreferences(
+            gmina=prefs.gmina,
+            miejscowosc=prefs.miejscowosc,
+            powiat=prefs.powiat,
+            lat=prefs.lat,
+            lon=prefs.lon,
+            radius_m=prefs.radius_m,
+            min_area=prefs.min_area,
+            max_area=prefs.max_area,
+            ownership_type=prefs.ownership_type,
+            build_status=prefs.build_status,
+            size_category=prefs.size_category,
+            pog_residential=prefs.pog_residential,
+            query_text=prefs.query_text,
+        )
+
+    async def _execute_search_pipeline(
+        self,
+        preferences: SearchPreferences,
+        limit: int,
+    ) -> List[SearchResult]:
+        """Execute the full search pipeline and combine results."""
         tasks = []
 
-        # Helper for empty async result
         async def empty_result():
             return []
 
@@ -266,25 +382,66 @@ class HybridSearchService:
                 source_name = ["graph", "spatial", "semantic"][i]
                 logger.error(f"Search task {source_name} failed: {r}")
 
-        # If only graph results, return them directly without RRF
-        if not spatial_results and not semantic_results:
+        # Combine results based on what's available
+        active_sources = sum([
+            bool(graph_results), bool(spatial_results), bool(semantic_results)
+        ])
+
+        if active_sources == 0:
+            combined = []
+        elif active_sources == 1 and graph_results:
             combined = self._convert_graph_to_results(graph_results)
+        elif active_sources == 1 and semantic_results:
+            combined = self._convert_semantic_to_results(semantic_results)
         else:
-            # Combine using RRF when multiple sources
             combined = self._combine_with_rrf(
                 spatial_results, semantic_results, graph_results
             )
 
-        # Take top results
-        combined = combined[:limit]
+        # Post-filter: enforce hard constraints on combined results
+        # Spatial/semantic sources don't apply all graph hard filters,
+        # so we filter here to ensure consistency
+        before_filter = len(combined)
+        combined = self._apply_hard_filters(combined, preferences)
+        if before_filter != len(combined):
+            logger.info(f"Post-filter removed {before_filter - len(combined)} results "
+                       f"not matching hard criteria")
 
-        # Optionally fetch full details (geometry) from PostGIS
-        if include_details and combined:
-            combined = await self._enrich_results(combined)
-
-        logger.info(f"Hybrid search returned {len(combined)} results "
-                   f"(graph={len(graph_results)}, spatial={len(spatial_results)}, semantic={len(semantic_results)})")
+        logger.info(f"Search pipeline: {len(combined)} results "
+                   f"(graph={len(graph_results)}, spatial={len(spatial_results)}, "
+                   f"semantic={len(semantic_results)})")
         return combined
+
+    @staticmethod
+    def _apply_hard_filters(
+        results: List[SearchResult],
+        preferences: SearchPreferences,
+    ) -> List[SearchResult]:
+        """Enforce hard constraints on combined results.
+
+        Spatial and semantic searches don't apply all graph hard filters
+        (area range, shape quality, POG exclusion). This post-filter
+        ensures consistency across all sources.
+        """
+        filtered = []
+        for r in results:
+            # Area range (if specified)
+            if r.area_m2 is not None:
+                if preferences.min_area and r.area_m2 < preferences.min_area:
+                    continue
+                if preferences.max_area and r.area_m2 > preferences.max_area:
+                    continue
+
+            # Shape quality: exclude extreme elongation
+            if r.aspect_ratio is not None and r.aspect_ratio > 6.0:
+                continue
+
+            # Shape quality: exclude very irregular shapes
+            if r.shape_index is not None and r.shape_index < 0.15:
+                continue
+
+            filtered.append(r)
+        return filtered
 
     def _convert_graph_to_results(self, graph_results: List[Dict]) -> List[SearchResult]:
         """Convert graph results directly to SearchResult when no RRF needed."""
@@ -311,6 +468,31 @@ class HybridSearchService:
                 dist_to_shop=r.get("dist_to_shop"),
                 pct_forest_500m=r.get("pct_forest_500m"),
                 has_road_access=r.get("has_road_access"),
+                shape_index=r.get("shape_index"),
+                aspect_ratio=r.get("aspect_ratio"),
+            )
+            results.append(result)
+        return results
+
+    def _convert_semantic_to_results(self, semantic_results: List[Dict]) -> List[SearchResult]:
+        """Convert semantic/GraphRAG results directly to SearchResult when no RRF needed."""
+        results = []
+        for i, r in enumerate(semantic_results):
+            result = SearchResult(
+                parcel_id=r.get("id_dzialki", ""),
+                rrf_score=r.get("similarity_score", 1.0 / (i + 1)),
+                sources=["semantic"],
+                gmina=r.get("gmina"),
+                miejscowosc=r.get("miejscowosc"),
+                area_m2=r.get("area_m2"),
+                quietness_score=r.get("quietness_score"),
+                nature_score=r.get("nature_score"),
+                accessibility_score=r.get("accessibility_score"),
+                has_mpzp=r.get("has_mpzp"),
+                mpzp_symbol=r.get("mpzp_symbol"),
+                centroid_lat=r.get("centroid_lat"),
+                centroid_lon=r.get("centroid_lon"),
+                similarity_score=r.get("similarity_score"),
             )
             results.append(result)
         return results
@@ -449,6 +631,8 @@ class HybridSearchService:
                 "pct_forest_500m": r.get("pct_forest_500m"),
                 "count_buildings_500m": r.get("count_buildings_500m"),
                 "has_road_access": r.get("has_road_access"),
+                "shape_index": r.get("shape_index"),
+                "aspect_ratio": r.get("aspect_ratio"),
                 "_source": "graph",
                 "_rank": i + 1,
             }
@@ -550,6 +734,8 @@ class HybridSearchService:
                 pct_forest_500m=data.get("pct_forest_500m"),
                 count_buildings_500m=data.get("count_buildings_500m"),
                 has_road_access=data.get("has_road_access"),
+                shape_index=data.get("shape_index"),
+                aspect_ratio=data.get("aspect_ratio"),
                 similarity_score=data.get("similarity_score"),
             )
             results.append(result)
@@ -612,6 +798,11 @@ class HybridSearchService:
                     result.pct_forest_500m = d.get("pct_forest_500m")
                 if result.has_road_access is None:
                     result.has_road_access = d.get("has_public_road_access")
+                # Shape quality fields
+                if result.shape_index is None:
+                    result.shape_index = d.get("shape_index")
+                if result.aspect_ratio is None:
+                    result.aspect_ratio = d.get("aspect_ratio")
 
         return results
 

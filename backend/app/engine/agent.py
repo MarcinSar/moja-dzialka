@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
-import asyncio
 from typing import Dict, Any, List, Optional, AsyncGenerator
 
 from loguru import logger
@@ -38,16 +36,8 @@ from app.engine.tool_gates import check_gates
 from app.engine.tool_executor_v4 import ToolExecutorV4
 
 
-# Retry configuration
+# SDK retry configuration (connection errors, 429, 5xx are retried automatically)
 MAX_RETRIES = 3
-INITIAL_BACKOFF = 1.0
-MAX_BACKOFF = 30.0
-
-RETRYABLE_ERRORS = (
-    anthropic.APIConnectionError,
-    anthropic.RateLimitError,
-    anthropic.InternalServerError,
-)
 
 
 class Agent:
@@ -68,7 +58,10 @@ class Agent:
 
     def __init__(self, model: Optional[str] = None):
         self.model = model or self.MODEL
-        self.client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self.client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            max_retries=MAX_RETRIES,  # SDK handles retry with exponential backoff
+        )
         self.system_prompt = get_system_prompt()
         self.tools = get_tool_definitions()
 
@@ -106,10 +99,11 @@ class Agent:
         while iteration < self.MAX_TOOL_ITERATIONS:
             iteration += 1
 
-            # Call Claude API with retry
+            # Call Claude API (SDK handles retries)
             try:
-                response = await self._call_api_with_retry(api_messages)
-            except Exception as e:
+                response = await self._call_api(api_messages)
+            except anthropic.APIError as e:
+                logger.error(f"API error: {e}")
                 yield {"type": "error", "data": {"message": str(e)}}
                 return
 
@@ -235,38 +229,18 @@ class Agent:
             for key, value in updates["user_fact"].items():
                 notepad.set_user_fact(key, value)
 
-    async def _call_api_with_retry(
+    async def _call_api(
         self,
         messages: List[Dict[str, Any]],
     ) -> anthropic.types.Message:
-        """Call Claude API with exponential backoff retry."""
-        backoff = INITIAL_BACKOFF
-
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                response = await self.client.messages.create(
-                    model=self.model,
-                    max_tokens=self.MAX_TOKENS,
-                    system=self.system_prompt,
-                    tools=self.tools,
-                    messages=messages,
-                )
-                return response
-
-            except RETRYABLE_ERRORS as e:
-                if attempt == MAX_RETRIES:
-                    logger.error(f"API call failed after {MAX_RETRIES} retries: {e}")
-                    raise
-
-                logger.warning(f"API call attempt {attempt + 1} failed: {e}. Retrying in {backoff}s...")
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, MAX_BACKOFF)
-
-            except anthropic.APIError as e:
-                logger.error(f"Non-retryable API error: {e}")
-                raise
-
-        raise RuntimeError("Unexpected: retry loop exhausted without returning or raising")
+        """Call Claude API. Retry is handled by the SDK (max_retries on client)."""
+        return await self.client.messages.create(
+            model=self.model,
+            max_tokens=self.MAX_TOKENS,
+            system=self.system_prompt,
+            tools=self.tools,
+            messages=messages,
+        )
 
     async def run_streaming(
         self,
@@ -346,12 +320,8 @@ class Agent:
                     # Get the final message
                     response = await s.get_final_message()
 
-            except RETRYABLE_ERRORS as e:
-                logger.warning(f"Streaming error (retryable): {e}")
-                yield {"type": "error", "data": {"message": str(e)}}
-                return
             except anthropic.APIError as e:
-                logger.error(f"API error on iteration {iteration}: {e}")
+                logger.error(f"API error on streaming iteration {iteration}: {e}")
                 yield {"type": "error", "data": {"message": f"API error: {e}"}}
                 return
 

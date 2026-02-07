@@ -35,6 +35,13 @@ async def lifespan(app: FastAPI):
         else:
             logger.warning(f"{db}: not connected - {status.get('error', 'unknown error')}")
 
+    # Pre-load embedding model to avoid 13s cold start on first request
+    try:
+        from app.services.embedding_service import EmbeddingService
+        EmbeddingService.preload()
+    except Exception as e:
+        logger.warning(f"Failed to pre-load embedding model: {e}")
+
     yield
 
     # Shutdown

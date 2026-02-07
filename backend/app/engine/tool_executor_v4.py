@@ -335,7 +335,7 @@ class ToolExecutorV4:
                 q_params["dzielnica"] = loc.dzielnica
                 q_params["dz_prefix"] = loc.dzielnica + " "
 
-        # Add filters from params
+        # Relationship-based filters (EXISTS subquery)
         if params.get("ownership_type"):
             conditions.append("EXISTS { MATCH (p)-[:HAS_OWNERSHIP]->(o:OwnershipType {id: $own}) }")
             q_params["own"] = params["ownership_type"]
@@ -345,14 +345,49 @@ class ToolExecutorV4:
         if params.get("size_category"):
             conditions.append("EXISTS { MATCH (p)-[:HAS_SIZE]->(sz:SizeCategory) WHERE sz.id IN $sizes }")
             q_params["sizes"] = params["size_category"]
+        if params.get("quietness_categories"):
+            conditions.append("EXISTS { MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory) WHERE qc.id IN $qcats }")
+            q_params["qcats"] = params["quietness_categories"]
+        if params.get("nature_categories"):
+            conditions.append("EXISTS { MATCH (p)-[:HAS_NATURE]->(nc:NatureCategory) WHERE nc.id IN $ncats }")
+            q_params["ncats"] = params["nature_categories"]
+
+        # Attribute-based filters (direct property)
+        if params.get("min_area_m2"):
+            conditions.append("p.area_m2 >= $min_area")
+            q_params["min_area"] = params["min_area_m2"]
+        if params.get("max_area_m2"):
+            conditions.append("p.area_m2 <= $max_area")
+            q_params["max_area"] = params["max_area_m2"]
+
+        # Default shape quality filters (match search_execute)
+        conditions.append("(p.aspect_ratio IS NULL OR p.aspect_ratio <= 6.0)")
+        conditions.append("(p.shape_index IS NULL OR p.shape_index >= 0.15)")
+        conditions.append("(p.pog_symbol IS NULL OR NOT p.pog_symbol IN ['SK', 'SI'])")
 
         where = " AND ".join(conditions) if conditions else "1=1"
+        # Build description of active filters for the agent
+        filter_desc = []
+        if loc and loc.validated and loc.dzielnica:
+            filter_desc.append(f"{loc.dzielnica}, {loc.gmina}")
+        elif loc and loc.validated and loc.gmina:
+            filter_desc.append(loc.gmina)
+        for key in ["ownership_type", "build_status"]:
+            if params.get(key):
+                filter_desc.append(params[key])
+        if params.get("min_area_m2") or params.get("max_area_m2"):
+            lo = params.get("min_area_m2", "?")
+            hi = params.get("max_area_m2", "?")
+            filter_desc.append(f"{lo}-{hi}m²")
+
         try:
             result = await neo4j.run(f"MATCH (p:Parcel) WHERE {where} RETURN count(p) as cnt", q_params)
             count = result[0]["cnt"] if result else 0
+            filters_str = ", ".join(filter_desc) if filter_desc else "bez filtrów"
             return {
                 "matching_count": count,
-                "message": f"**{count:,}** pasujących działek.".replace(",", " "),
+                "filters": filters_str,
+                "message": f"**{count:,}** pasujących działek ({filters_str}).".replace(",", " "),
             }, {}
         except Exception as e:
             return {"error": str(e)}, {}
@@ -402,10 +437,19 @@ class ToolExecutorV4:
             has_road_access=params.get("has_road_access"),
             pog_residential=params.get("pog_residential"),
             sort_by=params.get("sort_by", "quietness_score"),
-            ownership_type=params.get("ownership_type", "prywatna"),
-            build_status=params.get("build_status", "niezabudowana"),
+            ownership_type=params.get("ownership_type"),
+            build_status=params.get("build_status"),
             size_category=params.get("size_category"),
             query_text=query_text,
+            # Dimension weights from agent
+            w_quietness=params.get("w_quietness", 0.0),
+            w_nature=params.get("w_nature", 0.0),
+            w_forest=params.get("w_forest", 0.0),
+            w_water=params.get("w_water", 0.0),
+            w_school=params.get("w_school", 0.0),
+            w_shop=params.get("w_shop", 0.0),
+            w_transport=params.get("w_transport", 0.0),
+            w_accessibility=params.get("w_accessibility", 0.0),
         )
 
         results = await hybrid_search.search(search_prefs, limit=limit, include_details=True)
@@ -441,6 +485,8 @@ class ToolExecutorV4:
                 "dist_to_shop": r.dist_to_shop,
                 "pct_forest_500m": r.pct_forest_500m,
                 "has_road_access": r.has_road_access,
+                "shape_index": round(r.shape_index, 2) if getattr(r, "shape_index", None) else None,
+                "aspect_ratio": round(r.aspect_ratio, 1) if getattr(r, "aspect_ratio", None) else None,
             }
             result_dicts.append(d)
             self._parcel_index_map[idx] = r.parcel_id

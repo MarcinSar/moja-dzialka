@@ -67,14 +67,17 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
         {
             "name": "search_count",
             "description": (
-                "Szybki COUNT działek pasujących do filtrów. Używaj jako checkpoint. "
-                "Lokalizacja pobierana automatycznie z notepad.location."
+                "Szybki COUNT działek pasujących do filtrów. Używaj jako checkpoint PRZED search_execute. "
+                "Lokalizacja pobierana automatycznie z notepad.location. "
+                "Podawaj te same filtry co planujesz w search_execute (ownership, build_status, area, kategorie)."
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "ownership_type": {"type": "string", "description": "Typ własności: prywatna, publiczna, spółdzielcza, kościelna, inna"},
                     "build_status": {"type": "string", "description": "Status: zabudowana, niezabudowana"},
+                    "min_area_m2": {"type": "number", "description": "Minimalna powierzchnia w m²"},
+                    "max_area_m2": {"type": "number", "description": "Maksymalna powierzchnia w m²"},
                     "size_category": {
                         "type": "array", "items": {"type": "string"},
                         "description": "Kategorie rozmiaru: mala, pod_dom, duza, bardzo_duza"
@@ -139,6 +142,12 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                         "description": "Sortowanie wyników (domyślnie quietness_score)"
                     },
                     "query_text": {"type": "string", "description": "Tekst do wyszukiwania semantycznego (opcjonalny, auto-generowany z filtrów)"},
+                    "w_quietness": {"type": "number", "description": "Waga ciszy 0.0-1.0 (np. 0.3 = ważna, 0.0 = nieistotna). Auto jeśli pominiesz."},
+                    "w_nature": {"type": "number", "description": "Waga natury/zieleni 0.0-1.0"},
+                    "w_forest": {"type": "number", "description": "Waga bliskości lasu 0.0-1.0"},
+                    "w_water": {"type": "number", "description": "Waga bliskości wody 0.0-1.0"},
+                    "w_school": {"type": "number", "description": "Waga bliskości szkoły 0.0-1.0"},
+                    "w_transport": {"type": "number", "description": "Waga komunikacji/przystanków 0.0-1.0"},
                     "limit": {"type": "integer", "description": "Max wyników (domyślnie 30, max 50)"},
                 },
                 "required": [],

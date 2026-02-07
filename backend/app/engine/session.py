@@ -144,6 +144,7 @@ class Session:
 
         Injects notepad at the end of the user message.
         Includes compaction summary if available.
+        Ensures proper user/assistant alternation (Claude API requirement).
         """
         api_messages = []
 
@@ -158,12 +159,11 @@ class Session:
                 "content": "Rozumiem, kontynuujmy rozmowę. Mam w pamięci Twoje preferencje i dotychczasowe wyniki.",
             })
 
+        # Collect pending tool_result blocks to merge with the next user message
+        pending_tool_results: List[Dict[str, Any]] = []
+
         # Include existing messages
         for msg in self.messages:
-            api_msg = {"role": msg.role, "content": msg.content}
-
-            # For assistant messages with tool calls, include tool_use blocks
-            # AND a synthetic tool_result user message right after
             if msg.role == "assistant" and msg.tool_calls:
                 # Claude API format: content can be a list with text + tool_use blocks
                 content_blocks = []
@@ -177,11 +177,9 @@ class Session:
                         "input": tc.get("input", {}),
                     })
                 if content_blocks:
-                    api_msg["content"] = content_blocks
+                    api_messages.append({"role": "assistant", "content": content_blocks})
 
-                api_messages.append(api_msg)
-
-                # Every tool_use MUST be followed by tool_result in next user message
+                # Build tool_result blocks (must follow in next user message)
                 tool_result_blocks = []
                 results_by_name = {}
                 if msg.tool_results:
@@ -198,17 +196,33 @@ class Session:
                         "content": json.dumps(result, ensure_ascii=False, default=str)[:5000],
                     })
 
-                if tool_result_blocks:
-                    api_messages.append({"role": "user", "content": tool_result_blocks})
+                # Store for merging with next user message (proper alternation)
+                pending_tool_results = tool_result_blocks
+
+            elif msg.role == "user":
+                # Merge any pending tool_results INTO this user message
+                if pending_tool_results:
+                    content_blocks = list(pending_tool_results)
+                    content_blocks.append({"type": "text", "text": msg.content})
+                    api_messages.append({"role": "user", "content": content_blocks})
+                    pending_tool_results = []
+                else:
+                    api_messages.append({"role": "user", "content": msg.content})
             else:
-                api_messages.append(api_msg)
+                # Plain assistant message (no tools)
+                api_messages.append({"role": msg.role, "content": msg.content})
 
         # Add current user message with notepad injection
+        # Merge any remaining pending tool_results (if last history msg was assistant with tools)
         notepad_injection = self.notepad.to_injection()
-        api_messages.append({
-            "role": "user",
-            "content": f"{user_message}\n\n{notepad_injection}",
-        })
+        current_content = f"{user_message}\n\n{notepad_injection}"
+
+        if pending_tool_results:
+            content_blocks = list(pending_tool_results)
+            content_blocks.append({"type": "text", "text": current_content})
+            api_messages.append({"role": "user", "content": content_blocks})
+        else:
+            api_messages.append({"role": "user", "content": current_content})
 
         return api_messages
 

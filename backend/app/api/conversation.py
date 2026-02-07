@@ -106,10 +106,21 @@ async def save_session(session: Session) -> None:
 
 
 async def finalize_session_profile(session: Session) -> None:
-    """Merge session data into user profile on disconnect."""
+    """Merge session data into user profile on disconnect.
+
+    Only finalizes if the session had actual activity (messages exchanged).
+    Skips empty sessions from rapid connect/disconnect cycles.
+    """
     try:
+        # Skip empty sessions — no messages means no useful data to merge
+        if not session.messages:
+            return
+
         pm = get_profile_manager()
-        await pm.finalize_session(session.user_id, session.notepad.to_dict())
+        notepad_dict = session.notepad.to_dict()
+        if not notepad_dict:
+            return
+        await pm.finalize_session(session.user_id, notepad_dict)
     except Exception as e:
         logger.warning(f"Failed to finalize session profile: {e}")
 

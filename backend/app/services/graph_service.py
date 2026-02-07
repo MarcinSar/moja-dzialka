@@ -112,6 +112,20 @@ class ParcelSearchCriteria:
     # NEO4J V2: POG residential (NEW 2026-01-25)
     pog_residential: Optional[bool] = None  # Only residential POG zones
 
+    # Shape quality: include infrastructure zones (default: exclude SK/SI)
+    include_infrastructure: bool = False
+
+    # Dimension weights (0.0-1.0, higher = more important)
+    # Agent sets these based on user conversation emphasis
+    w_quietness: float = 0.0    # "cicha", "spokojna"
+    w_nature: float = 0.0       # "zielona", "blisko lasu"
+    w_forest: float = 0.0       # "blisko lasu" specifically
+    w_water: float = 0.0        # "blisko wody/morza/jeziora"
+    w_school: float = 0.0       # "blisko szkoły", "dzieci"
+    w_shop: float = 0.0         # "blisko sklepu"
+    w_transport: float = 0.0    # "dobry dojazd", "przystanek"
+    w_accessibility: float = 0.0  # general accessibility
+
     # Sorting preferences
     sort_by: str = "quietness_score"  # or "nature_score", "accessibility_score", "area_m2"
     sort_desc: bool = True
@@ -484,49 +498,94 @@ class GraphService:
     # PRIMARY SEARCH - Comprehensive parcel search using graph relationships
     # =========================================================================
 
+    @staticmethod
+    def _compute_weights(criteria: ParcelSearchCriteria) -> Dict[str, float]:
+        """Compute scoring weights from criteria.
+
+        If agent provided explicit weights (w_* > 0), use those.
+        Otherwise, auto-infer from which filters are active.
+        Weights are normalized to sum to ~1.0.
+        """
+        explicit = {
+            "quietness": criteria.w_quietness,
+            "nature": criteria.w_nature,
+            "forest": criteria.w_forest,
+            "water": criteria.w_water,
+            "school": criteria.w_school,
+            "shop": criteria.w_shop,
+            "transport": criteria.w_transport,
+            "accessibility": criteria.w_accessibility,
+        }
+
+        # If any explicit weight is set, use explicit weights
+        if any(v > 0 for v in explicit.values()):
+            return explicit
+
+        # Auto-infer: equal weight for each active dimension
+        inferred = {
+            "quietness": 0.25 if criteria.quietness_categories else 0.1,
+            "nature": 0.2 if criteria.nature_categories else 0.05,
+            "forest": 0.2 if criteria.max_dist_to_forest_m else 0.0,
+            "water": 0.2 if (criteria.water_type or criteria.max_dist_to_water_m
+                             or criteria.near_water_required) else 0.0,
+            "school": 0.15 if criteria.max_dist_to_school_m else 0.0,
+            "shop": 0.1 if criteria.max_dist_to_shop_m else 0.0,
+            "transport": 0.1 if (criteria.max_dist_to_bus_stop_m
+                                 or criteria.accessibility_categories) else 0.0,
+            "accessibility": 0.15 if criteria.accessibility_categories else 0.05,
+        }
+
+        # Normalize so active weights sum to ~1.0
+        total = sum(inferred.values())
+        if total > 0:
+            inferred = {k: round(v / total, 3) for k, v in inferred.items()}
+
+        return inferred
+
     async def search_parcels(
         self,
         criteria: ParcelSearchCriteria
     ) -> List[Dict[str, Any]]:
         """
-        PRIMARY search function using Neo4j graph relationships.
+        Scored search using Neo4j graph relationships.
 
-        Uses the NEW schema (2026-01-24):
-        - Parcel nodes with properties (gmina, dzielnica, etc.)
-        - Category relations: HAS_QUIETNESS, HAS_NATURE, HAS_ACCESS, HAS_DENSITY
-        - Distance properties directly on Parcel nodes
+        Two-tier approach:
+        - HARD filters (WHERE): location, area, ownership, build_status, zoning
+        - SOFT scoring: weighted exponential decay for distances,
+          normalized 0-100 scores for categories
+
+        Uses exp() for smooth distance decay instead of step functions.
+        Agent can provide explicit weights (w_*) or they are auto-inferred.
 
         Args:
             criteria: ParcelSearchCriteria with all search dimensions
 
         Returns:
-            List of parcel dictionaries with full details
+            List of parcel dictionaries with full details, ranked by score
         """
-        # Build dynamic Cypher query based on criteria
         match_clauses = ["MATCH (p:Parcel)"]
         where_conditions = []
         params = {"limit": criteria.limit}
 
-        # Location filters - now properties on Parcel
+        # ===== HARD FILTERS (must-match) =====
+
+        # Location
         if criteria.gmina:
             where_conditions.append("p.gmina = $gmina")
             params["gmina"] = criteria.gmina
 
         if criteria.miejscowosc:
-            # miejscowosc is now 'dzielnica' in new schema
-            # Handle sub-districts: "Wrzeszcz" matches "Wrzeszcz Dolny", "Wrzeszcz Górny"
             where_conditions.append(
                 "(p.dzielnica = $dzielnica OR p.dzielnica STARTS WITH $dzielnica_prefix)"
             )
             params["dzielnica"] = criteria.miejscowosc
             params["dzielnica_prefix"] = criteria.miejscowosc + " "
 
-        # powiat filter — reads from Parcel.powiat property
         if criteria.powiat:
-            conditions.append("p.powiat = $powiat")
+            where_conditions.append("p.powiat = $powiat")
             params["powiat"] = criteria.powiat
 
-        # Area filters (direct properties)
+        # Area range
         if criteria.min_area_m2:
             where_conditions.append("p.area_m2 >= $min_area")
             params["min_area"] = criteria.min_area_m2
@@ -535,135 +594,25 @@ class GraphService:
             where_conditions.append("p.area_m2 <= $max_area")
             params["max_area"] = criteria.max_area_m2
 
-        if criteria.area_category:
-            # Area category is now size_category property
-            where_conditions.append("p.size_category IN $area_categories")
-            params["area_categories"] = criteria.area_category
-
-        # NOTE: charakter_terenu filter removed - data is NULL for all parcels
-
-        # Category filters via relationships (NEW schema)
-        if criteria.quietness_categories:
-            match_clauses.append("MATCH (p)-[:HAS_QUIETNESS]->(qc:QuietnessCategory)")
-            where_conditions.append("qc.id IN $quietness_cats")
-            params["quietness_cats"] = criteria.quietness_categories
-
-        if criteria.nature_categories:
-            match_clauses.append("MATCH (p)-[:HAS_NATURE]->(nc:NatureCategory)")
-            where_conditions.append("nc.id IN $nature_cats")
-            params["nature_cats"] = criteria.nature_categories
-
-        if criteria.building_density:
-            match_clauses.append("MATCH (p)-[:HAS_DENSITY]->(dc:DensityCategory)")
-            where_conditions.append("dc.id IN $density")
-            params["density"] = criteria.building_density
-
-        # Accessibility filters
-        if criteria.accessibility_categories:
-            match_clauses.append("MATCH (p)-[:HAS_ACCESS]->(ac:AccessCategory)")
-            where_conditions.append("ac.id IN $access_cats")
-            params["access_cats"] = criteria.accessibility_categories
-
-        # has_road_access property not available in current schema
-        # Could use dist_to_main_road < threshold as proxy if needed
-        if criteria.has_road_access is not None:
-            # Using dist_to_main_road < 50m as proxy for road access
-            if criteria.has_road_access:
-                where_conditions.append("p.dist_to_main_road < 50")
-            else:
-                where_conditions.append("p.dist_to_main_road >= 50")
-
-        # POI proximity filters - now properties on Parcel
-        if criteria.max_dist_to_school_m:
-            where_conditions.append("p.dist_to_school <= $max_school_dist")
-            params["max_school_dist"] = criteria.max_dist_to_school_m
-
-        if criteria.max_dist_to_shop_m:
-            where_conditions.append("p.dist_to_supermarket <= $max_shop_dist")
-            params["max_shop_dist"] = criteria.max_dist_to_shop_m
-
-        if criteria.max_dist_to_bus_stop_m:
-            where_conditions.append("p.dist_to_bus_stop <= $max_bus_dist")
-            params["max_bus_dist"] = criteria.max_dist_to_bus_stop_m
-
-        if criteria.max_dist_to_hospital_m:
-            where_conditions.append("p.dist_to_doctors <= $max_hospital_dist")
-            params["max_hospital_dist"] = criteria.max_dist_to_hospital_m
-
-        # Nature proximity filters - now properties
-        if criteria.max_dist_to_forest_m:
-            where_conditions.append("p.dist_to_forest <= $max_forest_dist")
-            params["max_forest_dist"] = criteria.max_dist_to_forest_m
-
-        if criteria.max_dist_to_water_m:
-            where_conditions.append("p.dist_to_water <= $max_water_dist")
-            params["max_water_dist"] = criteria.max_dist_to_water_m
-
-        if criteria.min_forest_pct_500m:
-            where_conditions.append("p.pct_forest_500m >= $min_forest_pct")
-            params["min_forest_pct"] = criteria.min_forest_pct_500m
-
-        # Industrial distance - property
-        if criteria.min_dist_to_industrial_m:
-            where_conditions.append("p.dist_to_industrial >= $min_industrial_dist")
-            params["min_industrial_dist"] = criteria.min_dist_to_industrial_m
-
-        # Water type filters (NEW)
-        if criteria.water_type:
-            dist_field_map = {
-                "morze": "dist_to_sea",
-                "zatoka": "dist_to_sea",
-                "rzeka": "dist_to_river",
-                "jezioro": "dist_to_lake",
-                "kanal": "dist_to_canal",
-                "staw": "dist_to_pond",
-            }
-            dist_field = dist_field_map.get(criteria.water_type, "dist_to_water")
-            threshold = WATER_TYPES.get(criteria.water_type, {}).get("threshold_m", 500)
-            where_conditions.append(f"p.{dist_field} <= $water_threshold")
-            params["water_threshold"] = threshold
-
-        if criteria.max_dist_to_sea_m:
-            where_conditions.append("p.dist_to_sea <= $max_sea_dist")
-            params["max_sea_dist"] = criteria.max_dist_to_sea_m
-
-        if criteria.max_dist_to_lake_m:
-            where_conditions.append("p.dist_to_lake <= $max_lake_dist")
-            params["max_lake_dist"] = criteria.max_dist_to_lake_m
-
-        if criteria.max_dist_to_river_m:
-            where_conditions.append("p.dist_to_river <= $max_river_dist")
-            params["max_river_dist"] = criteria.max_dist_to_river_m
-
-        if criteria.near_water_required:
-            where_conditions.append("p.dist_to_water <= 500")
-
-        # NEO4J V2: Ownership filter via HAS_OWNERSHIP relation
+        # Ownership type (hard when explicitly requested - "chcę kupić")
         if criteria.ownership_type:
             match_clauses.append("MATCH (p)-[:HAS_OWNERSHIP]->(ot:OwnershipType)")
             where_conditions.append("ot.id = $ownership_type")
             params["ownership_type"] = criteria.ownership_type
 
-        # NEO4J V2: Build status filter via HAS_BUILD_STATUS relation
+        # Build status (hard when explicitly requested - "niezabudowana")
         if criteria.build_status:
             match_clauses.append("MATCH (p)-[:HAS_BUILD_STATUS]->(bs:BuildStatus)")
             where_conditions.append("bs.id = $build_status")
             params["build_status"] = criteria.build_status
 
-        # NEO4J V2: Size category filter via HAS_SIZE relation
-        if criteria.size_category:
-            match_clauses.append("MATCH (p)-[:HAS_SIZE]->(sz:SizeCategory)")
-            where_conditions.append("sz.id IN $size_categories")
-            params["size_categories"] = criteria.size_category
-
-        # NEO4J V2: POG residential filter via HAS_POG relation
+        # POG residential (hard - specific zoning requirement)
         if criteria.pog_residential:
             match_clauses.append("MATCH (p)-[:HAS_POG]->(pz:POGZone)")
             where_conditions.append("pz.is_residential = true")
 
-        # POG/MPZP filters - now properties on Parcel
+        # MPZP/POG filters (hard - regulatory)
         if criteria.has_mpzp is not None:
-            # has_mpzp is now represented by pog_symbol being NOT NULL
             if criteria.has_mpzp:
                 where_conditions.append("p.pog_symbol IS NOT NULL")
             else:
@@ -676,19 +625,285 @@ class GraphService:
             where_conditions.append("p.pog_symbol IN $pog_symbols")
             params["pog_symbols"] = criteria.mpzp_symbols
 
-        # Build WHERE clause
+        # Road access (hard - infrastructure)
+        if criteria.has_road_access is not None:
+            if criteria.has_road_access:
+                where_conditions.append("p.dist_to_main_road < 50")
+            else:
+                where_conditions.append("p.dist_to_main_road >= 50")
+
+        # ===== DEFAULT SHAPE QUALITY FILTERS (always active) =====
+        # Exclude extremely elongated parcels (road strips, canal borders)
+        where_conditions.append("(p.aspect_ratio IS NULL OR p.aspect_ratio <= 6.0)")
+        # Exclude very irregular shapes (compactness < 0.15 = extreme)
+        where_conditions.append("(p.shape_index IS NULL OR p.shape_index >= 0.15)")
+        # Exclude infrastructure POG zones by default (roads, technical infra)
+        if not criteria.include_infrastructure:
+            where_conditions.append(
+                "(p.pog_symbol IS NULL OR NOT p.pog_symbol IN ['SK', 'SI'])"
+            )
+
+        # ===== SOFT SCORING (weighted exponential decay) =====
+        # Scoring uses exp() for smooth distance decay and normalized 0-100 scores.
+        # Each dimension has a weight (0.0-1.0) set by agent based on user emphasis.
+        # If no weights provided, auto-inferred from which filters are active.
+        score_parts = []
+        has_soft_filters = False
+
+        # Auto-infer weights from active criteria when agent doesn't provide them
+        weights = self._compute_weights(criteria)
+
+        # --- Normalized score dimensions (0.0-1.0 range) ---
+
+        # Quietness (from 0-100 score → 0.0-1.0)
+        if weights["quietness"] > 0:
+            w = weights["quietness"]
+            if criteria.quietness_categories:
+                # Bonus for matching preferred category + continuous score
+                params["quietness_cats"] = criteria.quietness_categories
+                score_parts.append(
+                    f"{w} * (CASE WHEN p.kategoria_ciszy IN $quietness_cats "
+                    f"THEN 0.5 + 0.5 * coalesce(p.quietness_score, 0) / 100.0 "
+                    f"ELSE coalesce(p.quietness_score, 0) / 100.0 END)"
+                )
+            else:
+                score_parts.append(
+                    f"{w} * coalesce(p.quietness_score, 0) / 100.0"
+                )
+            has_soft_filters = True
+
+        # Nature (from 0-100 score → 0.0-1.0)
+        if weights["nature"] > 0:
+            w = weights["nature"]
+            if criteria.nature_categories:
+                params["nature_cats"] = criteria.nature_categories
+                score_parts.append(
+                    f"{w} * (CASE WHEN p.kategoria_natury IN $nature_cats "
+                    f"THEN 0.5 + 0.5 * coalesce(p.nature_score, 0) / 100.0 "
+                    f"ELSE coalesce(p.nature_score, 0) / 100.0 END)"
+                )
+            else:
+                score_parts.append(
+                    f"{w} * coalesce(p.nature_score, 0) / 100.0"
+                )
+            has_soft_filters = True
+
+        # Accessibility (from 0-100 score → 0.0-1.0)
+        if weights["accessibility"] > 0:
+            w = weights["accessibility"]
+            if criteria.accessibility_categories:
+                params["access_cats"] = criteria.accessibility_categories
+                score_parts.append(
+                    f"{w} * (CASE WHEN p.kategoria_dostepu IN $access_cats "
+                    f"THEN 0.5 + 0.5 * coalesce(p.accessibility_score, 0) / 100.0 "
+                    f"ELSE coalesce(p.accessibility_score, 0) / 100.0 END)"
+                )
+            else:
+                score_parts.append(
+                    f"{w} * coalesce(p.accessibility_score, 0) / 100.0"
+                )
+            has_soft_filters = True
+
+        # Density category match (binary bonus)
+        if criteria.building_density:
+            params["density_cats"] = criteria.building_density
+            score_parts.append(
+                "0.1 * CASE WHEN p.gestosc_zabudowy IN $density_cats THEN 1.0 ELSE 0.0 END"
+            )
+            has_soft_filters = True
+
+        # Size category match (binary bonus)
+        size_cats = criteria.size_category or criteria.area_category
+        if size_cats:
+            params["size_cats"] = size_cats
+            score_parts.append(
+                "0.1 * CASE WHEN p.size_category IN $size_cats THEN 1.0 ELSE 0.0 END"
+            )
+            has_soft_filters = True
+
+        # --- Distance-based scoring with exponential decay ---
+        # Formula: CASE WHEN dist <= ideal THEN 1.0 ELSE exp(-(dist - ideal) / decay) END
+        # ideal = threshold * 0.5 (perfect score zone)
+        # decay = threshold (score drops to ~37% at 1.5x threshold)
+
+        # Forest proximity
+        if weights["forest"] > 0:
+            w = weights["forest"]
+            ideal = int(criteria.max_dist_to_forest_m * 0.5) if criteria.max_dist_to_forest_m else 200
+            decay = criteria.max_dist_to_forest_m or 500
+            score_parts.append(
+                f"{w} * CASE WHEN p.dist_to_forest IS NULL THEN 0.0 "
+                f"WHEN p.dist_to_forest <= {ideal} THEN 1.0 "
+                f"ELSE exp(-1.0 * (p.dist_to_forest - {ideal}) / {decay}.0) END"
+            )
+            has_soft_filters = True
+
+        # Water proximity
+        if weights["water"] > 0:
+            w = weights["water"]
+            if criteria.water_type:
+                dist_field_map = {
+                    "morze": "dist_to_sea", "zatoka": "dist_to_sea",
+                    "rzeka": "dist_to_river", "jezioro": "dist_to_lake",
+                    "kanal": "dist_to_canal", "staw": "dist_to_pond",
+                }
+                dist_field = f"p.{dist_field_map.get(criteria.water_type, 'dist_to_water')}"
+                wt = WATER_TYPES.get(criteria.water_type, {})
+                ideal = int(wt.get("threshold_m", 500) * 0.3)
+                decay = int(wt.get("threshold_m", 500))
+            elif criteria.max_dist_to_water_m:
+                dist_field = "p.dist_to_water"
+                ideal = int(criteria.max_dist_to_water_m * 0.5)
+                decay = criteria.max_dist_to_water_m
+            else:
+                dist_field = "p.dist_to_water"
+                ideal = 200
+                decay = 500
+            score_parts.append(
+                f"{w} * CASE WHEN {dist_field} IS NULL THEN 0.0 "
+                f"WHEN {dist_field} <= {ideal} THEN 1.0 "
+                f"ELSE exp(-1.0 * ({dist_field} - {ideal}) / {decay}.0) END"
+            )
+            has_soft_filters = True
+
+        # Specific water distance scoring (sea/lake/river)
+        water_dist_configs = [
+            (criteria.max_dist_to_sea_m, "p.dist_to_sea"),
+            (criteria.max_dist_to_lake_m, "p.dist_to_lake"),
+            (criteria.max_dist_to_river_m, "p.dist_to_river"),
+        ]
+        for threshold, field_name in water_dist_configs:
+            if threshold:
+                ideal = int(threshold * 0.3)
+                score_parts.append(
+                    f"0.15 * CASE WHEN {field_name} IS NULL THEN 0.0 "
+                    f"WHEN {field_name} <= {ideal} THEN 1.0 "
+                    f"ELSE exp(-1.0 * ({field_name} - {ideal}) / {threshold}.0) END"
+                )
+                has_soft_filters = True
+
+        # Near water (general, when explicitly required)
+        if criteria.near_water_required and weights["water"] == 0:
+            score_parts.append(
+                "0.15 * CASE WHEN p.dist_to_water IS NULL THEN 0.0 "
+                "WHEN p.dist_to_water <= 150 THEN 1.0 "
+                "ELSE exp(-1.0 * (p.dist_to_water - 150) / 500.0) END"
+            )
+            has_soft_filters = True
+
+        # School proximity
+        if weights["school"] > 0:
+            w = weights["school"]
+            ideal = int(criteria.max_dist_to_school_m * 0.5) if criteria.max_dist_to_school_m else 400
+            decay = criteria.max_dist_to_school_m or 1000
+            score_parts.append(
+                f"{w} * CASE WHEN p.dist_to_school IS NULL THEN 0.0 "
+                f"WHEN p.dist_to_school <= {ideal} THEN 1.0 "
+                f"ELSE exp(-1.0 * (p.dist_to_school - {ideal}) / {decay}.0) END"
+            )
+            has_soft_filters = True
+
+        # Shop proximity
+        if weights["shop"] > 0:
+            w = weights["shop"]
+            ideal = int(criteria.max_dist_to_shop_m * 0.5) if criteria.max_dist_to_shop_m else 300
+            decay = criteria.max_dist_to_shop_m or 800
+            score_parts.append(
+                f"{w} * CASE WHEN p.dist_to_supermarket IS NULL THEN 0.0 "
+                f"WHEN p.dist_to_supermarket <= {ideal} THEN 1.0 "
+                f"ELSE exp(-1.0 * (p.dist_to_supermarket - {ideal}) / {decay}.0) END"
+            )
+            has_soft_filters = True
+
+        # Transport / bus stop proximity
+        if weights["transport"] > 0:
+            w = weights["transport"]
+            ideal = int(criteria.max_dist_to_bus_stop_m * 0.5) if criteria.max_dist_to_bus_stop_m else 250
+            decay = criteria.max_dist_to_bus_stop_m or 600
+            score_parts.append(
+                f"{w} * CASE WHEN p.dist_to_bus_stop IS NULL THEN 0.0 "
+                f"WHEN p.dist_to_bus_stop <= {ideal} THEN 1.0 "
+                f"ELSE exp(-1.0 * (p.dist_to_bus_stop - {ideal}) / {decay}.0) END"
+            )
+            has_soft_filters = True
+
+        # Hospital proximity (only when explicitly requested)
+        if criteria.max_dist_to_hospital_m:
+            ideal = int(criteria.max_dist_to_hospital_m * 0.5)
+            decay = criteria.max_dist_to_hospital_m
+            score_parts.append(
+                f"0.1 * CASE WHEN p.dist_to_doctors IS NULL THEN 0.0 "
+                f"WHEN p.dist_to_doctors <= {ideal} THEN 1.0 "
+                f"ELSE exp(-1.0 * (p.dist_to_doctors - {ideal}) / {decay}.0) END"
+            )
+            has_soft_filters = True
+
+        # Forest percentage in 500m buffer
+        if criteria.min_forest_pct_500m:
+            pct = criteria.min_forest_pct_500m
+            score_parts.append(
+                f"0.1 * CASE WHEN p.pct_forest_500m >= {pct} THEN 1.0 "
+                f"WHEN p.pct_forest_500m >= {pct * 0.5} THEN 0.5 "
+                f"ELSE coalesce(p.pct_forest_500m, 0) / {max(pct, 0.01)} END"
+            )
+            has_soft_filters = True
+
+        # Industrial distance (want to be FAR - reversed scoring)
+        if criteria.min_dist_to_industrial_m:
+            t = int(criteria.min_dist_to_industrial_m)
+            score_parts.append(
+                f"0.1 * CASE WHEN p.dist_to_industrial IS NULL THEN 0.5 "
+                f"WHEN p.dist_to_industrial >= {t} THEN 1.0 "
+                f"WHEN p.dist_to_industrial >= {max(1, t // 2)} THEN 0.5 "
+                f"ELSE 0.0 END"
+            )
+            has_soft_filters = True
+
+        # --- Shape quality scoring (always active, fixed weight) ---
+        # Compact, rectangular parcels get a bonus
+        score_parts.append(
+            "0.08 * ("
+            "  0.5 * CASE "
+            "    WHEN p.shape_index IS NULL THEN 0.3 "
+            "    WHEN p.shape_index >= 0.7 THEN 1.0 "
+            "    WHEN p.shape_index >= 0.4 THEN 0.6 "
+            "    ELSE 0.2 END"
+            "  + 0.5 * CASE "
+            "    WHEN p.aspect_ratio IS NULL THEN 0.3 "
+            "    WHEN p.aspect_ratio <= 2.0 THEN 1.0 "
+            "    WHEN p.aspect_ratio <= 4.0 THEN 0.6 "
+            "    ELSE 0.2 END"
+            ")"
+        )
+        has_soft_filters = True
+
+        # ===== BUILD QUERY =====
+
         where_clause = ""
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
 
-        # Sorting
-        sort_field = f"p.{criteria.sort_by}" if criteria.sort_by else "p.quietness_score"
-        sort_dir = "DESC" if criteria.sort_desc else "ASC"
+        # Build total score expression
+        if score_parts:
+            total_score_expr = " +\n              ".join(score_parts)
+        else:
+            # No soft filters - use the sort field as score for consistent ordering
+            sort_field = f"p.{criteria.sort_by}" if criteria.sort_by else "p.quietness_score"
+            total_score_expr = f"coalesce({sort_field}, 0)"
 
-        # Build full query
+        # Sorting: by total_score, with tiebreaker
+        if has_soft_filters:
+            order_clause = "ORDER BY total_score DESC, p.quietness_score DESC"
+        else:
+            sort_field = f"p.{criteria.sort_by}" if criteria.sort_by else "p.quietness_score"
+            sort_dir = "DESC" if criteria.sort_desc else "ASC"
+            order_clause = f"ORDER BY {sort_field} {sort_dir}"
+
         query = f"""
             {chr(10).join(match_clauses)}
             {where_clause}
+            WITH p,
+              ({total_score_expr}) AS total_score
             RETURN DISTINCT
                 p.id_dzialki as id,
                 p.gmina as gmina,
@@ -714,12 +929,19 @@ class GraphService:
                 p.dist_to_sea as dist_to_sea,
                 p.kategoria_ciszy as kategoria_ciszy,
                 p.kategoria_natury as kategoria_natury,
-                p.gestosc_zabudowy as gestosc_zabudowy
-            ORDER BY {sort_field} {sort_dir}
+                p.gestosc_zabudowy as gestosc_zabudowy,
+                p.shape_index as shape_index,
+                p.aspect_ratio as aspect_ratio,
+                total_score
+            {order_clause}
             LIMIT $limit
         """
 
-        logger.info(f"Graph search with {len(where_conditions)} conditions, sorting by {criteria.sort_by}")
+        active_weights = {k: v for k, v in weights.items() if v > 0}
+        logger.info(
+            f"Scored graph search: {len(where_conditions)} hard filters, "
+            f"{len(score_parts)} scoring dims, weights={active_weights}"
+        )
         logger.debug(f"Query: {query}")
         logger.debug(f"Params: {params}")
 

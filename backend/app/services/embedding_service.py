@@ -121,6 +121,17 @@ class EmbeddingService:
         return float(np.dot(e1, e2))
 
     @classmethod
+    def preload(cls) -> None:
+        """Pre-load the model at startup to avoid cold start delay.
+
+        Call this during app lifespan startup.
+        """
+        if cls._model is None:
+            logger.info("Pre-loading embedding model at startup...")
+            cls.get_model()
+            logger.info("Embedding model pre-loaded successfully.")
+
+    @classmethod
     def is_loaded(cls) -> bool:
         """Check if the model is already loaded.
 

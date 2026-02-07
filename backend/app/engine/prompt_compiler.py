@@ -54,6 +54,21 @@ Reguły wnioskowania z języka naturalnego:
 - "blisko morza" → water_type=morze
 - "dobry dojazd" → accessibility=[doskonała, dobra]
 
+Mapowanie polskich kwalifikatorów odległości na parametry max_dist_*:
+- "bezpośrednio przy"/"tuż obok" → 100-200m (las/woda: 100, szkoła/sklep: 200)
+- "bardzo blisko"/"pod nosem" → 200-400m
+- "blisko"/"niedaleko" → 300-700m (las: 300, szkoła: 500, sklep: 500)
+- "w zasięgu"/"w okolicy" → 700-1500m
+- "w rozsądnej odległości" → 1000-2500m
+
+Wagi wymiarów (w_quietness, w_nature, w_forest, w_water, w_school, w_transport):
+- Ustaw wagi na podstawie NACISKU użytkownika w rozmowie
+- "cisza jest NAJWAŻNIEJSZA" → w_quietness=0.4, reszta mniejsze
+- "blisko lasu i szkoły" (oba równe) → w_forest=0.3, w_school=0.3
+- "chcę spokój, ale fajnie by było blisko sklepu" → w_quietness=0.35, w_shop=0.15
+- Jeśli user nie podkreśla priorytetów → pomiń wagi (auto-wyliczone z aktywnych filtrów)
+- Suma wag NIE musi być 1.0 — backend normalizuje automatycznie
+
 Domyślne filtry (gdy user nie precyzuje):
 - ownership_type: prywatna (ZAWSZE - user chce kupić)
 - build_status: niezabudowana (domyślnie - pod budowę domu)

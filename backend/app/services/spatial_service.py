@@ -90,6 +90,11 @@ class SpatialService:
             conditions.append("is_residential_zone = :mpzp_budowlane")
             query_params["mpzp_budowlane"] = params.mpzp_budowlane
 
+        # Default shape quality filters (match graph_service defaults)
+        conditions.append("(aspect_ratio IS NULL OR aspect_ratio <= 6.0)")
+        conditions.append("(shape_index IS NULL OR shape_index >= 0.15)")
+        conditions.append("(pog_symbol IS NULL OR pog_symbol NOT IN ('SK', 'SI'))")
+
         where_clause = " AND ".join(conditions)
 
         query = f"""
@@ -302,7 +307,9 @@ class SpatialService:
                 accessibility_score,
                 centroid_lat,
                 centroid_lon,
-                (dist_to_main_road < 50) as has_public_road_access
+                (dist_to_main_road < 50) as has_public_road_access,
+                shape_index,
+                aspect_ratio
                 {geom_select}
             FROM parcels
             WHERE id_dzialki = ANY(:parcel_ids)

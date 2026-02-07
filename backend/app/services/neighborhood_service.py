@@ -151,19 +151,21 @@ class NeighborhoodService:
             query = """
             MATCH (p:Parcel {id_dzialki: $parcel_id})
 
-            // Count nearby buildings
             OPTIONAL MATCH (p)-[:LOCATED_IN]->(d:District)<-[:LOCATED_IN]-(neighbor:Parcel)
             WHERE neighbor.id_dzialki <> p.id_dzialki
 
             WITH p, d, collect(neighbor) as neighbors
+            WITH p, d, neighbors,
+                 [n in neighbors WHERE n.area_m2 IS NOT NULL | n.area_m2] AS areas,
+                 [n in neighbors WHERE n.quietness_score IS NOT NULL | n.quietness_score] AS qscores
 
             RETURN {
                 parcel_count_in_district: size(neighbors),
-                avg_area_m2: CASE WHEN size(neighbors) > 0
-                    THEN avg([n in neighbors | n.area_m2])
+                avg_area_m2: CASE WHEN size(areas) > 0
+                    THEN reduce(s = 0.0, x IN areas | s + x) / size(areas)
                     ELSE 0 END,
-                avg_quietness: CASE WHEN size(neighbors) > 0
-                    THEN avg([n in neighbors | n.quietness_score])
+                avg_quietness: CASE WHEN size(qscores) > 0
+                    THEN reduce(s = 0.0, x IN qscores | s + x) / size(qscores)
                     ELSE p.quietness_score END,
                 pct_built: CASE WHEN size(neighbors) > 0
                     THEN toFloat(size([n in neighbors WHERE n.is_built])) / size(neighbors)

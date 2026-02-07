@@ -90,20 +90,40 @@ class UserProfile:
         )
 
     def merge_session_data(self, notepad_dict: Dict[str, Any]) -> None:
-        """Merge data from a completed session's notepad into profile."""
+        """Merge data from a completed session's notepad into profile.
+
+        Only counts as a session if there was actual activity
+        (favorites, validated location, or user facts).
+        """
         from datetime import datetime
-        self.session_count += 1
+
+        if not notepad_dict or not isinstance(notepad_dict, dict):
+            return
+
+        # Check for actual session activity before counting
+        location = notepad_dict.get("location") or {}
+        facts = notepad_dict.get("user_facts") or {}
+
+        has_favorites = bool(notepad_dict.get("favorites"))
+        has_location = bool(location.get("validated"))
+        has_facts = bool(facts)
+        has_goal = bool(notepad_dict.get("user_goal"))
+        has_search = bool(notepad_dict.get("search_results"))
+
+        has_activity = has_favorites or has_location or has_facts or has_goal or has_search
+        if has_activity:
+            self.session_count += 1
+
         self.updated_at = datetime.now().isoformat()
 
         # Merge favorites
-        favorites = notepad_dict.get("favorites", [])
+        favorites = notepad_dict.get("favorites") or []
         for fav in favorites:
             if fav not in self.all_favorites:
                 self.all_favorites.append(fav)
 
         # Merge location
-        location = notepad_dict.get("location")
-        if location and location.get("validated"):
+        if location.get("validated"):
             loc_name = location.get("dzielnica") or location.get("gmina")
             if loc_name:
                 self.last_search_location = loc_name
@@ -111,16 +131,16 @@ class UserProfile:
                     self.preferred_locations.append(loc_name)
 
         # Merge user facts
-        facts = notepad_dict.get("user_facts", {})
-        if facts.get("budget_min"):
-            self.budget_min = facts["budget_min"]
-        if facts.get("budget_max"):
-            self.budget_max = facts["budget_max"]
-        if facts.get("family"):
-            self.family_info = facts["family"]
-        if facts.get("email"):
-            self.email = facts["email"]
-        if facts.get("phone"):
-            self.phone = facts["phone"]
-        if facts.get("name"):
-            self.name = facts["name"]
+        if isinstance(facts, dict):
+            if facts.get("budget_min"):
+                self.budget_min = facts["budget_min"]
+            if facts.get("budget_max"):
+                self.budget_max = facts["budget_max"]
+            if facts.get("family"):
+                self.family_info = facts["family"]
+            if facts.get("email"):
+                self.email = facts["email"]
+            if facts.get("phone"):
+                self.phone = facts["phone"]
+            if facts.get("name"):
+                self.name = facts["name"]
