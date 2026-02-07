@@ -162,7 +162,8 @@ class Session:
         for msg in self.messages:
             api_msg = {"role": msg.role, "content": msg.content}
 
-            # For assistant messages with tool calls, include them
+            # For assistant messages with tool calls, include tool_use blocks
+            # AND a synthetic tool_result user message right after
             if msg.role == "assistant" and msg.tool_calls:
                 # Claude API format: content can be a list with text + tool_use blocks
                 content_blocks = []
@@ -178,7 +179,29 @@ class Session:
                 if content_blocks:
                     api_msg["content"] = content_blocks
 
-            api_messages.append(api_msg)
+                api_messages.append(api_msg)
+
+                # Every tool_use MUST be followed by tool_result in next user message
+                tool_result_blocks = []
+                results_by_name = {}
+                if msg.tool_results:
+                    for tr in msg.tool_results:
+                        results_by_name[tr.get("name", "")] = tr.get("result", {})
+
+                for tc in msg.tool_calls:
+                    tc_name = tc.get("name", "")
+                    tc_id = tc.get("id", "")
+                    result = results_by_name.get(tc_name, {"status": "ok"})
+                    tool_result_blocks.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": json.dumps(result, ensure_ascii=False, default=str)[:5000],
+                    })
+
+                if tool_result_blocks:
+                    api_messages.append({"role": "user", "content": tool_result_blocks})
+            else:
+                api_messages.append(api_msg)
 
         # Add current user message with notepad injection
         notepad_injection = self.notepad.to_injection()
