@@ -23,7 +23,7 @@ from .tool_executor_v4 import ToolExecutorV4
 from .tool_gates import check_gates
 from .tool_definitions import get_tool_definitions
 from .prompt_compiler import get_system_prompt
-from .result_store import ResultStore
+from . import result_store
 
 # v2/v3 - Legacy (still used by conversation_v2.py)
 from .agent_coordinator import AgentCoordinator
@@ -51,7 +51,7 @@ __all__ = [
     "check_gates",
     "get_tool_definitions",
     "get_system_prompt",
-    "ResultStore",
+    "result_store",
     # v2/v3 legacy
     "AgentCoordinator",
     "PropertyAdvisorAgent",
