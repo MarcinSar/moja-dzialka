@@ -1,13 +1,12 @@
 # CLAUDE.md - Projekt moja-dzialka
 
-## Status: AGENT SYSTEM v3.0 ✅ UKOŃCZONY (2026-02-02)
+## Status: SEARCH QUALITY v1 ✅ UKOŃCZONY (2026-02-07)
 
-**MAJOR UPDATE:** Pełna przebudowa systemu agentowego inspirowana wzorcami OpenClaw.
+**LATEST UPDATE (2026-02-07):** Jakość wyszukiwania — filtrowanie nieatrakcyjnych działek, paginacja wyników, poprawki WMS.
 
-**Nowa architektura v3.0:**
-- **Multi-Agent System** - 6 wyspecjalizowanych sub-agentów (Discovery, Search, Analyst, Narrator, Feedback, Lead)
-- **Hybrid Memory** - 5-tier (Immediate/Redis/PostgreSQL/Files/Neo4j) + Memory Flush
-- **SKILL.md Format** - deklaratywne definicje skills z YAML frontmatter i gates
+**Poprzednie:**
+- **2026-02-02:** Agent System v3.0 - Multi-agent, Memory Flush, Skills v3
+- **2026-01-25:** Neo4j v2 Pipeline - 171k węzłów, 5.94M relacji, dual embeddings
 - **Tool Schema V3** - reliability scores, cost indicators, composition hints
 - **Premium Services** - Neighborhood Analysis, 3D Terrain (LiDAR skeleton)
 - **Feedback Learning** - re-ranking based on favorites/rejections
@@ -761,6 +760,7 @@ DISCOVERY → SEARCH → EVALUATION → NEGOTIATION → LEAD_CAPTURE
 | 25 | `25_create_poi_relations.py` | 1.54M NEAR_* relacji |
 | 26 | `26_generate_parcel_embeddings.py` | Text + Graph embeddings |
 | 27 | `27_create_adjacency_relations.py` | 407,825 ADJACENT_TO |
+| 28 | `28_add_shape_quality.py` | aspect_ratio (PostGIS + Neo4j) |
 
 ### Semantic Entity Resolution
 | Krok | Skrypt | Output |
@@ -869,6 +869,62 @@ services:
 ---
 
 ## Changelog
+
+### 2026-02-07: Search Quality v1 ✅
+
+**Cel:** Poprawa jakości wyników wyszukiwania — filtrowanie pasków drogowych, paginacja, WMS.
+
+**Zmiany:**
+
+1. **Shape quality filtering (`28_add_shape_quality.py`, `graph_service.py`, `parcel_search.py`, `spatial_service.py`):**
+   - Pre-computed `aspect_ratio` w PostGIS i Neo4j (154,959 działek)
+   - Hard filters: `aspect_ratio <= 6.0`, `shape_index >= 0.15`, POG SK/SI exclusion
+   - Soft scoring: 8% waga za dobry kształt (compact + rectangular bonus)
+   - Post-filter `_apply_hard_filters()` na RRF combined results
+   - Filtry aktywne we wszystkich źródłach: graph, spatial, semantic, search_count
+
+2. **District city assignment fix (`24_import_parcels_v2.py`):**
+   - Fix: przypisanie dzielnic do miasta przez dominant city (parcel count majority)
+   - Fix: idempotent BELONGS_TO (DELETE+CREATE zamiast MERGE)
+   - Naprawiono: Osowa, Wielki Kack, Orłowo miały fałszywe BELONGS_TO do Sopotu
+
+3. **Agent pagination fix (`prompt_compiler.py`, `tool_executor_v4.py`):**
+   - Problem: agent powtarzał search_execute z tymi samymi filtrami → identyczne wyniki
+   - Fix: explicit prompt rules — "pokaż inne" → `results_load_page(page=N)`, nie nowy search
+   - Fix: search_execute response z `remaining`, `pages_total`, `hint` o paginacji
+
+4. **Tool gates bug fix (`tool_gates.py`):**
+   - Bug: `_evaluate_check("notepad.search_results is not None")` ZAWSZE zwracał False
+   - Przyczyna: `.split(".")` nie rozdzielał `"search_results is not None"` (brak kropki)
+   - Fix: parsowanie suffixu `" is not None"` przed splitem
+   - Odblokowane: `results_load_page`, `search_refine`, `search_similar`, `search_adjacent`
+
+5. **WMS overlay fix (`mapLayerStore.ts`, `MapPanelImmersive.tsx`):**
+   - Dodano `version: '1.3.0'` do Leaflet WMS options
+   - Poprawione nazwy warstw MPZP: `raster` (krajowa integracja, 1672 gmin)
+   - EGiB i Ortofoto działają poprawnie
+   - Uwaga: Trójmiasto nie uczestniczy w krajowej integracji MPZP
+
+6. **Auto satellite layer (`App.tsx`):**
+   - Mapa automatycznie przełącza się na podkład satelitarny przy prezentacji wyników
+
+**Zmodyfikowane pliki:**
+
+| Plik | Zmiana |
+|------|--------|
+| `egib/scripts/pipeline/28_add_shape_quality.py` | NOWY — compute aspect_ratio |
+| `egib/scripts/pipeline/24_import_parcels_v2.py` | Fix district city assignment |
+| `backend/app/services/graph_service.py` | Hard filters, soft scoring, RETURN fields |
+| `backend/app/services/parcel_search.py` | Post-filter, shape fields, include_infrastructure |
+| `backend/app/services/spatial_service.py` | Shape quality filters |
+| `backend/app/engine/tool_executor_v4.py` | Shape info, pagination hints, search_count filters |
+| `backend/app/engine/prompt_compiler.py` | Pagination rules |
+| `backend/app/engine/tool_gates.py` | Fix "is not None" parsing |
+| `frontend/src/stores/mapLayerStore.ts` | WMS layer names + version |
+| `frontend/src/components/results/MapPanelImmersive.tsx` | WMS version 1.3.0 |
+| `frontend/src/App.tsx` | Auto satellite on results |
+
+---
 
 ### 2026-02-02: Agent System v3.0 ✅ MAJOR
 
@@ -1021,20 +1077,22 @@ services:
 10. [x] **Agent System v3.0** - Multi-agent, Memory Flush, Skills v3, Tool Schema v3
 11. [x] **Premium Services** - Neighborhood Analysis, 3D Terrain skeleton, Feedback Learning
 12. [x] **Legacy Cleanup** - usunięcie nieużywanych komponentów
+13. [x] **Search Quality v1** - shape filtering, pagination fix, tool gates fix, WMS fix
 
 ### Do zrobienia 📋
-13. [ ] **Frontend v3** - aktualizacja UI do obsługi wszystkich funkcji agenta
+14. [ ] **Frontend v3** - aktualizacja UI do obsługi wszystkich funkcji agenta
     - Multi-agent responses display
     - Feedback controls (favorites/rejections)
     - Premium feature indicators
     - Neighborhood analysis visualization
-14. [ ] Testy E2E wyszukiwania przez agenta
-15. [ ] Deploy na serwer produkcyjny (Hetzner)
-16. [ ] Integracja płatności (Stripe)
-17. [ ] Lead capture UI + analytics
-18. [ ] Community detection (Louvain) dla rekomendacji
-19. [ ] Monitoring (Grafana + Prometheus)
+15. [ ] Testy E2E wyszukiwania przez agenta
+16. [ ] Deploy na serwer produkcyjny (Hetzner)
+17. [ ] Integracja płatności (Stripe)
+18. [ ] Lead capture UI + analytics
+19. [ ] Community detection (Louvain) dla rekomendacji
+20. [ ] Monitoring (Grafana + Prometheus)
+21. [ ] Lokalne WMS MPZP (geogdansk.pl, Gdynia, Sopot) — krajowa integracja nie obejmuje Trójmiasta
 
 ---
 
-*Ostatnia aktualizacja: 2026-02-02 17:10 UTC*
+*Ostatnia aktualizacja: 2026-02-07 17:40 UTC*

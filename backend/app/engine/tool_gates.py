@@ -89,18 +89,24 @@ def _evaluate_check(check: str, notepad: Notepad, tool_params: Dict[str, Any]) -
         return bool(tool_params.get("email") or tool_params.get("phone"))
 
     if "notepad." in check:
-        parts = check.replace("notepad.", "").split(".")
+        # Handle "is not None" suffix before splitting
+        is_none_check = False
+        clean_check = check
+        if " is not None" in check:
+            clean_check = check.replace(" is not None", "")
+            is_none_check = True
+
+        parts = clean_check.replace("notepad.", "").split(".")
 
         obj = notepad
         for part in parts:
-            # Handle "is not None" at end
-            if part == "is not None":
-                return obj is not None
             if obj is None:
                 return False
             obj = getattr(obj, part, None)
 
-        # If we get here without "is not None", treat as truthy check
+        if is_none_check:
+            return obj is not None
+        # Otherwise treat as truthy check
         return bool(obj)
 
     return True  # Unknown check passes by default
