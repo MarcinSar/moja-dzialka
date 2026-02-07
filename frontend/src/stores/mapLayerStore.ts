@@ -28,7 +28,7 @@ export const WMS_OVERLAYS: Record<OverlayLayer, { name: string; url: string; lay
   mpzp: {
     name: 'MPZP',
     url: 'https://mapy.geoportal.gov.pl/wss/ext/KrajowaIntegracjaMiejscowychPlanowZagospodarowaniaPrzestrzennego',
-    layers: 'raster,wektor-linie,wektor-powierzchnie',
+    layers: 'raster',
     format: 'image/png',
     opacity: 0.6,
   },

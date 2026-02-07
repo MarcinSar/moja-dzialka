@@ -123,6 +123,7 @@ export function MapPanelImmersive() {
           transparent: true,
           opacity: config.opacity,
           maxZoom: 19,
+          version: '1.3.0',
         });
         wmsLayer.addTo(map);
         wmsLayer.setZIndex(1);
