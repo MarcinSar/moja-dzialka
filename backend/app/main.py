@@ -13,6 +13,7 @@ from loguru import logger
 
 from app.config import settings
 from app.services.database import check_all_connections, close_all_connections
+from app.api.conversation import router as conversation_v4_router
 from app.api.conversation_v2 import router as conversation_router
 from app.api.search import router as search_router
 from app.api.lidar import router as lidar_router
@@ -62,7 +63,9 @@ app.add_middleware(
 # INCLUDE ROUTERS
 # =============================================================================
 
-# All APIs now use v2 architecture
+# v4 single-agent conversation (new architecture)
+app.include_router(conversation_v4_router, prefix="/api")  # /api/v4/conversation
+# v2 multi-agent conversation (legacy, kept for backward compat)
 app.include_router(conversation_router, prefix="/api")  # /api/v2/conversation
 app.include_router(search_router, prefix="/api/v1")     # Search stays at v1 (no changes needed)
 app.include_router(lidar_router, prefix="/api/v1")      # LiDAR stays at v1
@@ -104,10 +107,18 @@ async def api_info():
     """API information and available endpoints."""
     return {
         "name": "moja-dzialka API",
-        "version": "2.0.0",
-        "architecture": "Software 3.0 with 7-layer memory model",
+        "version": "4.0.0",
+        "architecture": "Single agent + notepad-driven flow",
         "endpoints": {
-            "conversation": {
+            "conversation_v4": {
+                "websocket": "/api/v4/conversation/ws",
+                "chat": "POST /api/v4/conversation/chat",
+                "session": "GET /api/v4/conversation/session/{session_id}",
+                "history": "GET /api/v4/conversation/session/{session_id}/history",
+                "finalize": "POST /api/v4/conversation/session/{session_id}/finalize",
+                "delete": "DELETE /api/v4/conversation/session/{session_id}",
+            },
+            "conversation_v2_legacy": {
                 "websocket": "/api/v2/conversation/ws",
                 "chat": "POST /api/v2/conversation/chat",
                 "state": "GET /api/v2/conversation/user/{user_id}/state",
